@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+asyncpg
+python-dotenv
+openai
+python-telegram-bot
+streamlit
+psycopg2
