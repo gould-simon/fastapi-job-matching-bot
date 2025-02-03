@@ -1,0 +1,90 @@
+---
+description: General project rules
+globs: 
+---
+# General Project Rules
+
+## 1️⃣ Project Overview
+This is a **FastAPI-powered AI job-matching bot** that integrates with **Telegram** and uses **PostgreSQL (hosted on Render)** as its database.  
+- The bot allows users to chat, upload CVs, receive job matches, and set job preferences.  
+- The system must be **asynchronous** for handling Telegram requests efficiently.  
+- The backend is deployed on **Fly.io**, while the database is on **Render**.  
+
+📌 **Refer to** `Product_Requirements_Document.md` for architecture, features, and business logic.
+
+---
+
+## 2️⃣ FastAPI Best Practices
+- Use **`async def`** for all database queries, API calls, and I/O-bound tasks.
+- **Pydantic models** should be used for request validation and response schemas.
+- Use **dependency injection** for database sessions and external services.
+- Follow **RESTful API design principles** with clear, documented endpoints.
+
+### **API Design Guidelines**
+- Each endpoint must specify a **response model** (`response_model=YourSchema`).
+- Use **`Depends()`** for injecting database sessions.
+- Implement **rate-limiting** and **input validation** to prevent spam or abuse.
+
+📌 **Refer to** [FastAPI Docs](https://fastapi.tiangolo.com/) for best practices.
+
+---
+
+## 3️⃣ Database & Models (PostgreSQL)
+- The bot interacts with **the existing job database from accountingfirmjobs.com**.
+- A `users` table will be created to track Telegram users and their preferences.
+- Use **SQLAlchemy 2.0** with **asyncpg** for database interactions.
+- Ensure **indexed queries** for fast job lookups.
+
+📌 **Refer to** `Product_Requirements_Document.md` for the exact schema design.
+
+---
+
+## 4️⃣ Telegram Bot Integration
+- The bot must use **python-telegram-bot** for managing conversations.
+- User **messages and interactions should be stored in the database**.
+- **Error handling** must prevent bot crashes due to invalid user inputs.
+- Implement **state management** for tracking user progress in job searches.
+
+📌 **Refer to** `Product_Requirements_Document.md` for full bot functionality.
+
+---
+
+## 5️⃣ Security & Authentication
+- Use **.env files** for API keys and sensitive credentials.
+- Do not commit `.env` files—use `.gitignore` to exclude them.
+- Validate **all** incoming user data to prevent **SQL injection & bot abuse**.
+- Implement **logging and monitoring** for debugging Telegram bot interactions.
+
+---
+
+## 6️⃣ Deployment & Performance Considerations
+- Deploy the FastAPI backend to **Fly.io**.
+- Use **async database queries** to prevent blocking operations.
+- Optimize for **scalability**:
+  - Use **connection pooling** for PostgreSQL.
+  - Cache **frequently accessed** job queries using **Redis (future scope)**.
+- Ensure the **Telegram bot can handle concurrent users efficiently**.
+
+---
+
+## 7️⃣ AI Matching & Data Enrichment
+- The bot should collect **user preferences dynamically** over time.
+- Use **OpenAI embeddings** for CV parsing and job matching (future scope).
+- Store **user career history and job preferences** for improving job recommendations.
+
+📌 **Refer to** `Product_Requirements_Document.md` for AI-matching details.
+
+---
+
+## 🔹 Summary of Core Principles
+✅ Follow **FastAPI best practices** for API development.  
+✅ Maintain **async** workflows to handle bot interactions efficiently.  
+✅ Use **PostgreSQL** as the central job-matching database.  
+✅ Ensure **Telegram bot reliability** by handling errors gracefully.  
+✅ Use **environment variables** for security & deployment.  
+✅ Reference **Product_Requirements_Document.md** for all major decisions.  
+
+---
+
+### ✅ **Final Notes**
+This rules file should guide **Cursor's AI** when providing suggestions for **FastAPI, database design, and Telegram bot development**.  

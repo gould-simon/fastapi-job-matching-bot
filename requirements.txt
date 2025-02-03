@@ -1,9 +1,31 @@
+# FastAPI & Server
 fastapi
 uvicorn
+
+# Database & ORM
 sqlalchemy
 asyncpg
+psycopg2-binary
+alembic  # For database migrations
+
+# Environment Variables
 python-dotenv
+
+# AI & Embeddings
 openai
+
+
+# Telegram Bot
 python-telegram-bot
+
+# CV Parsing & File Handling
+pdfplumber  # Extract text from PDFs
+python-docx  # Extract text from Word Documents
+pillow  # For image processing (optional, but useful if handling images in CVs)
+
+# Web UI (Optional, for testing)
 streamlit
-psycopg2
+
+# Linting & Formatting (Optional, for clean code)
+black  # Auto-formats Python code
+flake8  # Linter for enforcing best practices
