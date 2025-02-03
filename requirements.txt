@@ -12,11 +12,11 @@ alembic  # For database migrations
 python-dotenv
 
 # AI & Embeddings
-openai
+openai>=1.0.0
 
 
 # Telegram Bot
-python-telegram-bot
+python-telegram-bot>=20.0
 
 # CV Parsing & File Handling
 pdfplumber  # Extract text from PDFs
