@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # Create temp directory if it doesn't exist
 os.makedirs("temp", exist_ok=True)
 
+# Create the application instance at module level
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
 # Define command handlers
 async def start(update: Update, context: CallbackContext) -> None:
     welcome_message = (
@@ -125,26 +128,22 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
         )
         await update.message.reply_text(error_message)
 
-# Add debug logs in main()
 def main():
     try:
         logger.debug("Starting bot initialization...")
         logger.debug(f"Using token: {TELEGRAM_BOT_TOKEN[:5]}...")
         
-        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        logger.debug("Application built successfully")
-
         # Register command handlers
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("search_jobs", search_jobs))
-        app.add_handler(CommandHandler("upload_cv", upload_cv))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        app.add_handler(MessageHandler(filters.Document.ALL, upload_cv))  # Handle file uploads
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("search_jobs", search_jobs))
+        application.add_handler(CommandHandler("upload_cv", upload_cv))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.Document.ALL, upload_cv))  # Handle file uploads
         logger.debug("Handlers registered successfully")
 
         # Start polling
         logger.info("🤖 Bot is now polling for messages...")
-        app.run_polling()
+        application.run_polling()
     except Exception as e:
         logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
         raise
