@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from dotenv import load_dotenv
 import os
 import logging
-from app.ai_handler import get_ai_response
+from app.ai_handler import get_ai_response, process_cv
 from app.database import SessionLocal
 from app.models import User
 
@@ -64,7 +64,6 @@ async def search_jobs(update: Update, context: CallbackContext) -> None:
 
 async def upload_cv(update: Update, context: CallbackContext) -> None:
     """Handle CV file uploads"""
-    # Check if a document was sent
     if not update.message.document:
         await update.message.reply_text(
             "Please send your CV as a document (PDF or Word format)."
@@ -72,27 +71,59 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
         return
 
     try:
+        # Show typing indicator
+        await update.message.chat.send_action(action="typing")
+        
         # Get file information
         doc = update.message.document
         file = await context.bot.get_file(doc.file_id)
         
+        # Log file details
+        logger.debug(f"Received file: {doc.file_name} (type: {doc.mime_type}, size: {doc.file_size} bytes)")
+        
+        # Validate file type
+        if not doc.file_name.lower().endswith(('.pdf', '.doc', '.docx')):
+            await update.message.reply_text(
+                "❌ Please upload your CV in PDF or Word (.doc/.docx) format only."
+            )
+            return
+
+        # Create temp directory if it doesn't exist
+        os.makedirs("temp", exist_ok=True)
+        
         # Download the file
-        # You might want to save this to a temporary location or process directly
         file_path = f"temp/{doc.file_name}"
         await file.download_to_drive(file_path)
+        logger.debug(f"File downloaded to: {file_path}")
 
-        # TODO: Process the CV using your AI handler
-        # This would integrate with your AI processing logic
+        # Send initial response
+        processing_message = await update.message.reply_text(
+            "✅ Thanks for sharing your CV! I'm analyzing it now..."
+        )
 
-        await update.message.reply_text(
-            "✅ Thanks for sharing your CV! I'll analyze it and find the best matching jobs for you."
+        # Process the CV and get AI analysis
+        cv_analysis = await process_cv(file_path)
+        logger.debug("CV analysis completed")
+        
+        # Send detailed analysis
+        await processing_message.edit_text(
+            f"🎯 Here's my analysis of your CV:\n\n{cv_analysis}\n\n"
+            "Would you like me to search for jobs matching your profile? "
+            "Use /search_jobs to start looking!"
         )
 
     except Exception as e:
-        await update.message.reply_text(
-            "❌ Sorry, I couldn't process your CV. Please try again or contact support."
+        logger.error(f"Error processing CV: {str(e)}", exc_info=True)
+        error_message = (
+            "❌ Sorry, I couldn't process your CV. The error was:\n"
+            f"{str(e)}\n\n"
+            "Please ensure:\n"
+            "- The file is in PDF or Word format\n"
+            "- The file is not password protected\n"
+            "- The file is not corrupted\n"
+            "Try uploading again or contact support if the issue persists."
         )
-        print(f"Error processing CV: {str(e)}")
+        await update.message.reply_text(error_message)
 
 # Add debug logs in main()
 def main():
