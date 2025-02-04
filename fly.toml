@@ -6,8 +6,6 @@ app = "your-app-name"
 [env]
   PORT = "8080"
   PYTHON_VERSION = "3.8.20"
-  DATABASE_URL="your-render-db-url"
-  TELEGRAM_BOT_TOKEN="your_production_bot_token"
   ENVIRONMENT = "production"
 
 [[services]]
