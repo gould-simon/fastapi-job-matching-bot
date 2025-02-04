@@ -76,6 +76,26 @@ This is a **FastAPI-powered AI job-matching bot** that integrates with **Telegra
 
 ---
 
+## 8️⃣ Logging & Monitoring Standards
+- Use structured logging with proper levels (DEBUG, INFO, ERROR)
+- Implement database logging for critical operations
+- Store logs in SQLite for the admin dashboard
+- Include proper error context in all log messages
+
+## 9️⃣ Database Connection Management
+- Use connection pooling for PostgreSQL connections
+- Implement proper connection cleanup
+- Handle connection timeouts and keepalives
+- Follow the retry pattern for failed connections
+
+## 🔟 Admin Dashboard Guidelines
+- Build with Streamlit for real-time monitoring
+- Include user activity metrics
+- Implement log viewing and filtering
+- Enable data export functionality
+
+---
+
 ## 🔹 Summary of Core Principles
 ✅ Follow **FastAPI best practices** for API development.  
 ✅ Maintain **async** workflows to handle bot interactions efficiently.  

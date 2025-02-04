@@ -7,16 +7,41 @@ from app.ai_handler import get_ai_response, process_cv
 from app.database import SessionLocal
 from app.models import User
 import asyncio
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
 # Load environment variables
 load_dotenv()
 
-# Update the logging configuration FIRST
-logging.basicConfig(
-    level=logging.DEBUG,  # Change to DEBUG for more detailed logs
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+def setup_logging():
+    """Configure logging with file cleanup on startup"""
+    # Ensure logs directory exists
+    os.makedirs('logs', exist_ok=True)
+    
+    # Clear existing log file
+    log_file = 'logs/conversations.log'
+    open(log_file, 'w').close()  # Truncate the file
+    
+    # Setup logging configuration
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            RotatingFileHandler(
+                log_file,
+                maxBytes=10*1024*1024,  # 10MB
+                backupCount=5
+            ),
+            logging.StreamHandler()  # Also log to console
+        ]
+    )
+    
+    logger = logging.getLogger(__name__)
+    logger.info("Logging setup complete - previous logs cleared")
+    return logger
+
+# Use this at the start of your bot
+logger = setup_logging()
 
 # Retrieve Telegram Bot Token
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -39,27 +64,7 @@ async def start(update: Update, context: CallbackContext) -> None:
         # Log the incoming request
         logger.info(f"Start command received from user {update.effective_user.id}")
         
-        # Get or create user in database
-        async with SessionLocal() as db:
-            # Check if user exists
-            result = await db.execute(
-                "SELECT * FROM users WHERE telegram_id = :telegram_id",
-                {"telegram_id": update.effective_user.id}
-            )
-            user = result.first()
-            
-            if not user:
-                # Create new user
-                new_user = User(
-                    telegram_id=update.effective_user.id,
-                    username=update.effective_user.username,
-                    first_name=update.effective_user.first_name,
-                    last_name=update.effective_user.last_name
-                )
-                db.add(new_user)
-                await db.commit()
-                logger.info(f"New user registered: {update.effective_user.id}")
-
+        # First send welcome message before database operations
         welcome_message = (
             "👋 Hello! I'm your AI-powered job-matching assistant for accounting professionals!\n\n"
             "Here's what I can help you with:\n"
@@ -71,27 +76,56 @@ async def start(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(welcome_message)
         logger.info(f"Welcome message sent to user {update.effective_user.id}")
         
+        # Then handle database operations
+        try:
+            async with SessionLocal() as db:
+                # Check if user exists
+                logger.debug("Checking if user exists in database...")
+                result = await db.execute(
+                    "SELECT * FROM users WHERE telegram_id = :telegram_id",
+                    {"telegram_id": update.effective_user.id}
+                )
+                user = result.first()
+                
+                if not user:
+                    # Create new user
+                    logger.debug("Creating new user...")
+                    new_user = User(
+                        telegram_id=update.effective_user.id,
+                        username=update.effective_user.username,
+                        first_name=update.effective_user.first_name,
+                        last_name=update.effective_user.last_name
+                    )
+                    db.add(new_user)
+                    await db.commit()
+                    logger.info(f"New user registered: {update.effective_user.id}")
+        except Exception as db_error:
+            logger.error(f"Database error in start command: {str(db_error)}", exc_info=True)
+            # Don't return error to user since welcome message was already sent
+            
     except Exception as e:
         logger.error(f"Error in start command: {str(e)}", exc_info=True)
         await update.message.reply_text("Sorry, I encountered an error. Please try again.")
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     try:
-        user_input = update.message.text
+        user = update.effective_user
+        user_message = update.message.text
         
-        # Show typing indicator
-        await update.message.chat.send_action(action="typing")
+        # Log the incoming message
+        logger.info(f"👤 User ({user.username or user.id}): {user_message}")
         
         # Get AI response
-        ai_response = await get_ai_response(
-            user_input,
-            context="User is looking for accounting job opportunities"
-        )
+        response = await get_ai_response(user_message)
         
-        await update.message.reply_text(ai_response)
+        # Log the bot's response
+        logger.info(f"🤖 Bot: {response}")
+        
+        await update.message.reply_text(response)
+        
     except Exception as e:
-        logger.error(f"Error handling message: {str(e)}", exc_info=True)
-        await update.message.reply_text("Sorry, I encountered an error. Please try again.")
+        logger.error(f"Error in message handler: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, I encountered an error processing your message.")
 
 async def search_jobs(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(

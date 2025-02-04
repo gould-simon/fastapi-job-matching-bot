@@ -157,6 +157,33 @@ CREATE TABLE jobs (
 
 ---
 
+## 9️⃣ Admin Dashboard Requirements
+### 🔹 Core Metrics Display
+- Total users count
+- Active users in last 7 days
+- Job search metrics
+- User engagement statistics
+
+### 🔹 Logging System
+- Real-time log viewing
+- Log level filtering
+- Log export functionality
+- Error tracking and monitoring
+
+### 🔹 Database Management
+- Connection pool monitoring
+- Database URL validation
+- Connection status checks
+- Error rate monitoring
+
+### 🔹 Error Handling & Recovery
+- Automatic connection retry
+- Graceful error handling
+- User-friendly error messages
+- Error notification system
+
+---
+
 ## 📌 Next Steps
 1️⃣ **Build & Deploy the Telegram bot with basic job search.**  
 2️⃣ **Implement AI-powered job matching from CV uploads.**  
