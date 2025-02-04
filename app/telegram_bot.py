@@ -6,22 +6,26 @@ import logging
 from app.ai_handler import get_ai_response, process_cv
 from app.database import SessionLocal
 from app.models import User
+import asyncio
 
 # Load environment variables
 load_dotenv()
 
-# Retrieve Telegram Bot Token
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("🚨 TELEGRAM_BOT_TOKEN is missing! Check your .env file.")
-
-# Update the logging configuration
+# Update the logging configuration FIRST
 logging.basicConfig(
     level=logging.DEBUG,  # Change to DEBUG for more detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Retrieve Telegram Bot Token
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("🚨 TELEGRAM_BOT_TOKEN is missing! Check your .env file.")
+
+# Add environment identifier
+ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
+logger.info(f"🚀 Starting bot in {ENVIRONMENT} environment using bot token: {TELEGRAM_BOT_TOKEN[:8]}...")
 
 # Create temp directory if it doesn't exist
 os.makedirs("temp", exist_ok=True)
@@ -31,29 +35,63 @@ application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 # Define command handlers
 async def start(update: Update, context: CallbackContext) -> None:
-    welcome_message = (
-        "👋 Hello! I'm your AI-powered job-matching assistant for accounting professionals!\n\n"
-        "Here's what I can help you with:\n"
-        "🔍 /search_jobs - Search for accounting jobs\n"
-        "📄 /upload_cv - Upload your CV for personalized matches\n"
-        "🔔 /set_alerts - Set up job alerts\n"
-        "💬 Or simply chat with me about your career goals!"
-    )
-    await update.message.reply_text(welcome_message)
+    try:
+        # Log the incoming request
+        logger.info(f"Start command received from user {update.effective_user.id}")
+        
+        # Get or create user in database
+        async with SessionLocal() as db:
+            # Check if user exists
+            result = await db.execute(
+                "SELECT * FROM users WHERE telegram_id = :telegram_id",
+                {"telegram_id": update.effective_user.id}
+            )
+            user = result.first()
+            
+            if not user:
+                # Create new user
+                new_user = User(
+                    telegram_id=update.effective_user.id,
+                    username=update.effective_user.username,
+                    first_name=update.effective_user.first_name,
+                    last_name=update.effective_user.last_name
+                )
+                db.add(new_user)
+                await db.commit()
+                logger.info(f"New user registered: {update.effective_user.id}")
+
+        welcome_message = (
+            "👋 Hello! I'm your AI-powered job-matching assistant for accounting professionals!\n\n"
+            "Here's what I can help you with:\n"
+            "🔍 /search_jobs - Search for accounting jobs\n"
+            "📄 /upload_cv - Upload your CV for personalized matches\n"
+            "🔔 /set_alerts - Set up job alerts\n"
+            "💬 Or simply chat with me about your career goals!"
+        )
+        await update.message.reply_text(welcome_message)
+        logger.info(f"Welcome message sent to user {update.effective_user.id}")
+        
+    except Exception as e:
+        logger.error(f"Error in start command: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, I encountered an error. Please try again.")
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
-    user_input = update.message.text
-    
-    # Show typing indicator
-    await update.message.chat.send_action(action="typing")
-    
-    # Get AI response
-    ai_response = await get_ai_response(
-        user_input,
-        context="User is looking for accounting job opportunities"
-    )
-    
-    await update.message.reply_text(ai_response)
+    try:
+        user_input = update.message.text
+        
+        # Show typing indicator
+        await update.message.chat.send_action(action="typing")
+        
+        # Get AI response
+        ai_response = await get_ai_response(
+            user_input,
+            context="User is looking for accounting job opportunities"
+        )
+        
+        await update.message.reply_text(ai_response)
+    except Exception as e:
+        logger.error(f"Error handling message: {str(e)}", exc_info=True)
+        await update.message.reply_text("Sorry, I encountered an error. Please try again.")
 
 async def search_jobs(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(
@@ -128,7 +166,7 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
         )
         await update.message.reply_text(error_message)
 
-def main():
+async def main() -> None:
     try:
         logger.debug("Starting bot initialization...")
         logger.debug(f"Using token: {TELEGRAM_BOT_TOKEN[:5]}...")
@@ -138,15 +176,34 @@ def main():
         application.add_handler(CommandHandler("search_jobs", search_jobs))
         application.add_handler(CommandHandler("upload_cv", upload_cv))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(MessageHandler(filters.Document.ALL, upload_cv))  # Handle file uploads
+        application.add_handler(MessageHandler(filters.Document.ALL, upload_cv))
         logger.debug("Handlers registered successfully")
 
         # Start polling
         logger.info("🤖 Bot is now polling for messages...")
-        application.run_polling()
+        
+        # Start the bot
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        
+        logger.info("Bot is running. Press Ctrl+C to stop")
+        
+        # Keep the bot running until interrupted
+        stop_signal = asyncio.Event()
+        await stop_signal.wait()
+        
     except Exception as e:
         logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
         raise
+    finally:
+        # Only try to stop if the application was started
+        if application.running:
+            await application.stop()
 
 if __name__ == "__main__":
-    main()
+    # Run the bot in polling mode for local development
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")

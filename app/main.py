@@ -18,6 +18,21 @@ async def webhook(request: Request):
     await application.update_queue.put(data)
     return {"ok": True}
 
+@app.get("/bot-status")
+async def bot_status():
+    try:
+        bot_info = await application.bot.get_me()
+        return {
+            "status": "running",
+            "bot_username": bot_info.username,
+            "handlers_registered": len(application.handlers)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
 # Webhook setup (only run when deploying to production)
 if __name__ == "__main__":
     import uvicorn
