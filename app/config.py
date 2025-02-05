@@ -25,3 +25,13 @@ logger.info(f"DATABASE_URL starts with: {DATABASE_URL[:30]}...")  # Show just th
 
 # Debugging output
 print("Loaded DATABASE_URL:", DATABASE_URL)  # Should print the full database URL
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler('logs/conversations.log', mode='a', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)

@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from dotenv import load_dotenv
 import os
 import logging
-from app.ai_handler import get_ai_response, process_cv, extract_job_preferences
+from app.ai_handler import get_ai_response, process_cv, extract_job_preferences, standardize_search_terms
 from app.database import SessionLocal, test_database_connection, list_all_tables
 from app.models import User, UserSearch
 import asyncio
@@ -11,6 +11,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from sqlalchemy import text
 import json
+import time
 
 # Load environment variables
 load_dotenv()
@@ -22,17 +23,19 @@ def setup_logging():
     
     # Clear existing log file
     log_file = 'logs/conversations.log'
-    open(log_file, 'w').close()  # Truncate the file
+    open(log_file, 'w', encoding='utf-8').close()  # Truncate the file
     
     # Setup logging configuration
     logging.basicConfig(
         level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
             RotatingFileHandler(
                 log_file,
                 maxBytes=10*1024*1024,  # 10MB
-                backupCount=5
+                backupCount=5,
+                encoding='utf-8'
             ),
             logging.StreamHandler()  # Also log to console
         ]
@@ -155,19 +158,84 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
     try:
         user_input = update.message.text
         user_id = update.effective_user.id
+        start_time = time.time()
         
         logger.debug(f"Starting job preference processing for user {user_id}")
         logger.info(f"Processing job preferences for user {user_id}: {user_input}")
         
         # Extract structured preferences using AI
-        logger.debug("Calling extract_job_preferences")
-        preferences = await extract_job_preferences(user_input)
-        logger.info(f"Extracted preferences: {preferences}")
+        try:
+            logger.debug("Calling extract_job_preferences")
+            preferences = await extract_job_preferences(user_input)
+            if not preferences:
+                logger.warning(f"No preferences extracted from input: {user_input}")
+                await update.message.reply_text(
+                    "I couldn't understand your job preferences. Please try again with more specific details about:\n"
+                    "• The role you're looking for\n"
+                    "• Your preferred location\n"
+                    "• Your experience level"
+                )
+                return ConversationHandler.END
+            logger.info(f"Extracted preferences: {preferences}")
+        except Exception as e:
+            logger.error(f"Error extracting preferences: {str(e)}", exc_info=True)
+            await update.message.reply_text(
+                "Sorry, I had trouble understanding your preferences. Please try again with clearer details."
+            )
+            return ConversationHandler.END
+        
+        # Standardize search terms
+        try:
+            logger.debug("Standardizing search terms")
+            standardized = await standardize_search_terms(preferences)
+            if not standardized:
+                logger.warning(f"Failed to standardize terms for preferences: {preferences}")
+                await update.message.reply_text(
+                    "I had trouble processing your search terms. Please try again with different wording."
+                )
+                return ConversationHandler.END
+            logger.info(f"Standardized terms: {standardized}")
+        except Exception as e:
+            logger.error(f"Error standardizing search terms: {str(e)}", exc_info=True)
+            await update.message.reply_text(
+                "Sorry, I encountered an error processing your search terms. Please try again."
+            )
+            return ConversationHandler.END
+        
+        # Validate standardized terms
+        if not any(
+            standardized.get(key, {}).get('search_variations', [])
+            for key in ['role', 'location', 'experience']
+        ):
+            logger.warning(f"No valid search variations generated for any field: {standardized}")
+            await update.message.reply_text(
+                "I couldn't generate valid search terms. Please try again with more specific details."
+            )
+            return ConversationHandler.END
+        
+        # Log the number of search variations
+        for key, value in standardized.items():
+            if isinstance(value, dict) and 'search_variations' in value:
+                logger.debug(f"Number of {key} variations: {len(value['search_variations'])}")
+                logger.debug(f"{key} variations: {value['search_variations']}")
         
         # Store the search in database
         async with SessionLocal() as db:
             try:
-                # Search for matching jobs
+                # Prepare search parameters - simplified
+                try:
+                    search_params = {
+                        "job_pattern": f"%{str(standardized.get('role', {}).get('standardized', '')).lower()}%",
+                        "location_pattern": f"%{str(standardized.get('location', {}).get('standardized', '')).lower()}%",
+                        "seniority_pattern": f"%{str(standardized.get('experience', {}).get('standardized', '')).lower()}%"
+                    }
+                    
+                    logger.debug(f"Search parameters prepared: {json.dumps(search_params, indent=2)}")
+                except Exception as e:
+                    logger.error(f"Error preparing search parameters: {str(e)}", exc_info=True)
+                    raise
+
+                # Execute search query with simplified patterns
                 query = text("""
                     SELECT DISTINCT
                         af.name as firm_name,
@@ -177,98 +245,41 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                         j.location,
                         j.employment,
                         j.salary,
-                        j.link
+                        j.link,
+                        j.date_published,
+                        CASE 
+                            WHEN LOWER(j.job_title) LIKE :job_pattern THEN 3
+                            WHEN LOWER(j.service) LIKE :job_pattern THEN 2
+                            ELSE 1
+                        END as match_score
                     FROM "JobsApp_job" j
                     JOIN "JobsApp_accountingfirm" af ON j.firm_id = af.id
-                    WHERE 1=1
-                    AND (
-                        CASE 
-                            -- For standard job titles (e.g., "audit manager")
-                            WHEN :search_type = 'job_title' THEN
-                                (LOWER(j.job_title) LIKE :role_pattern
-                                OR (LOWER(j.service) LIKE :service_pattern 
-                                    AND LOWER(j.seniority) LIKE :position_pattern))
-                            
-                            -- For specialized searches (e.g., "audit technology")
-                            WHEN :search_type = 'specialized' THEN
-                                ((LOWER(j.job_title) LIKE :tech_pattern AND LOWER(j.service) LIKE :service_pattern)
-                                OR (LOWER(j.job_title) LIKE :service_pattern AND LOWER(j.job_title) LIKE :tech_pattern))
-                            
-                            -- For general searches
-                            ELSE (LOWER(j.job_title) LIKE :role_pattern 
-                                OR LOWER(j.service) LIKE :role_pattern)
-                        END
+                    WHERE (
+                        LOWER(j.job_title) LIKE :job_pattern
+                        OR LOWER(j.service) LIKE :job_pattern
                     )
-                    AND (
-                        CASE WHEN :location IS NOT NULL AND :location != ''
-                        THEN (LOWER(j.location) LIKE :location_pattern1 
-                            OR LOWER(j.location) LIKE :location_pattern2)
-                        ELSE TRUE END
-                    )
-                    AND (
-                        CASE WHEN :experience IS NOT NULL AND :experience != ''
-                        THEN (LOWER(j.seniority) LIKE :seniority_pattern1 
-                            OR LOWER(j.seniority) LIKE :seniority_pattern2)
-                        ELSE TRUE END
-                    )
-                    ORDER BY j.date_published DESC NULLS LAST
+                    AND LOWER(j.location) LIKE :location_pattern
+                    AND LOWER(j.seniority) LIKE :seniority_pattern
+                    ORDER BY match_score DESC, j.date_published DESC NULLS LAST
                     LIMIT 5
                 """)
-                
-                # Prepare search patterns
-                role = preferences.get("role", "").lower() if preferences.get("role") else ""
-                search_type = preferences.get("search_type", "general")
-                location = preferences.get("location", "").lower() if preferences.get("location") else ""
-                experience = preferences.get("experience", "").lower() if preferences.get("experience") else ""
-                
-                # Split role into components based on search type
-                role_parts = role.split() if role else []
-                
-                if search_type == "job_title":
-                    # For "audit manager", service="audit", position="manager"
-                    service_term = role_parts[0] if len(role_parts) > 0 else ""
-                    position_term = role_parts[1] if len(role_parts) > 1 else ""
-                    tech_pattern = "%technology%"  # Default tech pattern
-                elif search_type == "specialized":
-                    # For "audit technology", service="audit", tech="technology"
-                    service_term = role_parts[0] if len(role_parts) > 0 else ""
-                    position_term = ""
-                    tech_pattern = f"%{role_parts[1]}%" if len(role_parts) > 1 else "%technology%"
-                else:
-                    service_term = role
-                    position_term = ""
-                    tech_pattern = "%technology%"
-                
-                # Handle seniority/experience level
-                seniority_terms = ["manager", "director", "senior", "associate", "partner"]
-                if any(term in experience.lower() for term in seniority_terms):
-                    seniority_pattern1 = f"%{experience}%"
-                    seniority_pattern2 = f"%{experience}%"
-                else:
-                    seniority_pattern1 = "%manager%"
-                    seniority_pattern2 = "%director%"
-                
-                search_params = {
-                    "role": role,
-                    "role_pattern": f"%{role}%",
-                    "search_type": search_type,
-                    "service_pattern": f"%{service_term}%",
-                    "position_pattern": f"%{position_term}%",
-                    "tech_pattern": tech_pattern,
-                    "location": location,
-                    "location_pattern1": f"%{location}%",
-                    "location_pattern2": f"%{location.replace('new york', 'ny')}%",
-                    "experience": experience,
-                    "seniority_pattern1": seniority_pattern1,
-                    "seniority_pattern2": seniority_pattern2
-                }
-                
-                logger.debug(f"Executing search with parameters: {search_params}")
-                result = await db.execute(query, search_params)
-                jobs = result.fetchall()
-                logger.info(f"Found {len(jobs) if jobs else 0} matching jobs")
+
+                try:
+                    # Execute the query
+                    result = await db.execute(query, search_params)
+                    jobs = result.fetchall()
+                    search_time = time.time() - start_time
+                    logger.info(f"Search completed in {search_time:.2f} seconds")
+                    logger.info(f"Found {len(jobs) if jobs else 0} matching jobs")
+                except Exception as e:
+                    logger.error(f"Database query execution error: {str(e)}", exc_info=True)
+                    logger.error(f"Failed query parameters: {search_params}")
+                    raise
                 
                 if jobs:
+                    logger.debug("Job matches found:")
+                    for job in jobs:
+                        logger.debug(f"Match: {job.firm_name} - {job.job_title} ({job.location})")
                     response = "🎯 Here are some matching jobs:\n\n"
                     for job in jobs:
                         response += (
@@ -294,35 +305,17 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                     await update.message.reply_text(response, parse_mode='Markdown', disable_web_page_preview=True)
                     logger.info("Successfully sent job matches to user")
                 else:
-                    # Try a broader search by removing some constraints
-                    broader_query = text("""
-                        SELECT DISTINCT
-                            af.name as firm_name,
-                            j.job_title,
-                            j.seniority,
-                            j.service,
-                            j.location,
-                            j.employment,
-                            j.salary,
-                            j.link
-                        FROM "JobsApp_job" j
-                        JOIN "JobsApp_accountingfirm" af ON j.firm_id = af.id
-                        WHERE 
-                            (LOWER(j.job_title) LIKE :service_pattern
-                            OR LOWER(j.service) LIKE :service_pattern)
-                            AND (
-                                LOWER(j.location) LIKE :location_pattern1 
-                                OR LOWER(j.location) LIKE :location_pattern2
-                            )
-                            AND (
-                                LOWER(j.seniority) LIKE :seniority_pattern1
-                                OR LOWER(j.seniority) LIKE :seniority_pattern2
-                            )
-                        ORDER BY j.date_published DESC NULLS LAST
-                        LIMIT 5
-                    """)
+                    # Try a broader search by using more permissive patterns
+                    broader_params = {
+                        "job_pattern": f"%{str(standardized.get('role', {}).get('standardized', '')).split()[0].lower()}%",  # Use first word only
+                        "location_pattern": "%%",  # Match any location
+                        "seniority_pattern": "%%"  # Match any seniority
+                    }
                     
-                    result = await db.execute(broader_query, search_params)
+                    logger.debug("No exact matches found, trying broader search with parameters:")
+                    logger.debug(json.dumps(broader_params, indent=2))
+                    
+                    result = await db.execute(query, broader_params)
                     broader_jobs = result.fetchall()
                     
                     if broader_jobs:
@@ -353,7 +346,7 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                     else:
                         logger.info("No matches found, sending alternative message")
                         await update.message.reply_text(
-                            "😔 I couldn't find any exact matches for your preferences.\n\n"
+                            "😔 I couldn't find any matching jobs.\n\n"
                             "Try:\n"
                             "• Using more general terms\n"
                             "• Removing location requirements\n"
@@ -384,6 +377,9 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
         )
         return
 
+    file_path = None
+    processing_message = None
+
     try:
         # Show typing indicator
         await update.message.chat.send_action(action="typing")
@@ -412,19 +408,39 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
 
         # Send initial response
         processing_message = await update.message.reply_text(
-            "✅ Thanks for sharing your CV! I'm analyzing it now..."
+            "✅ Thanks for sharing your CV! I'm analyzing it now...\n"
+            "This may take a few moments. I'll notify you when the analysis is complete."
         )
 
-        # Process the CV and get AI analysis
-        cv_analysis = await process_cv(file_path)
-        logger.debug("CV analysis completed")
-        
-        # Send detailed analysis
-        await processing_message.edit_text(
-            f"🎯 Here's my analysis of your CV:\n\n{cv_analysis}\n\n"
-            "Would you like me to search for jobs matching your profile? "
-            "Use /search_jobs to start looking!"
-        )
+        # Define an async function to process the CV and update the user
+        async def process_cv_and_update():
+            try:
+                # Process the CV and get AI analysis
+                cv_analysis = await process_cv(file_path)
+                logger.debug("CV analysis completed")
+                
+                # Send detailed analysis
+                await processing_message.edit_text(
+                    f"🎯 Here's my analysis of your CV:\n\n{cv_analysis}\n\n"
+                    "Would you like me to search for jobs matching your profile? "
+                    "Use /search_jobs to start looking!"
+                )
+            except Exception as e:
+                logger.error(f"Error in CV processing task: {str(e)}", exc_info=True)
+                await processing_message.edit_text(
+                    "❌ Sorry, I encountered an error while analyzing your CV.\n"
+                    "Please try uploading again or contact support if the issue persists."
+                )
+            finally:
+                # Clean up the temporary file
+                try:
+                    os.remove(file_path)
+                    logger.debug(f"Cleaned up temporary file: {file_path}")
+                except Exception as e:
+                    logger.error(f"Error cleaning up temporary file: {str(e)}")
+
+        # Create background task for CV processing
+        asyncio.create_task(process_cv_and_update())
 
     except Exception as e:
         logger.error(f"Error processing CV: {str(e)}", exc_info=True)
@@ -437,7 +453,17 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
             "- The file is not corrupted\n"
             "Try uploading again or contact support if the issue persists."
         )
-        await update.message.reply_text(error_message)
+        # Only send error message if we haven't already sent one via processing_message
+        if not processing_message or not processing_message.edit_date:
+            await update.message.reply_text(error_message)
+            
+        # Clean up the file if it exists
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.debug(f"Cleaned up temporary file after error: {file_path}")
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup: {str(cleanup_error)}", exc_info=True)
 
 async def cancel(update: Update, context: CallbackContext) -> int:
     """Cancel the conversation."""

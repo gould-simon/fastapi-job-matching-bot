@@ -73,28 +73,20 @@ async def process_cv(file_path: str) -> str:
 
         logger.debug(f"Successfully extracted {len(text)} characters from CV")
         
-        # Create a specific prompt for CV analysis
-        system_prompt = """You are an expert CV analyzer for accounting professionals. 
-        Analyze the CV and provide:
+        # Create context and prompt for CV analysis
+        context = """Analyze this CV as an expert CV analyzer for accounting professionals. 
+        Provide:
         1. A summary of key skills and experience
         2. Suggested job roles that match their profile
         3. Any suggestions for improving their CV
         Keep the response concise and professional."""
         
-        # Get AI analysis of the CV
+        # Use the existing get_ai_response function for CV analysis
         logger.debug("Sending CV text to OpenAI for analysis")
-        response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Analyze this CV:\n\n{text}"}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        
+        response = await get_ai_response(text, context=context)
         logger.debug("Successfully received analysis from OpenAI")
-        return response.choices[0].message.content
+        
+        return response
         
     except Exception as e:
         logger.error(f"Error in process_cv: {str(e)}", exc_info=True)
@@ -192,7 +184,11 @@ async def extract_job_preferences(user_input: str) -> Dict:
         # Clean up location
         if preferences.get("location"):
             preferences["location"] = preferences["location"].lower().strip()
-            if preferences["location"] == "ny":
+            # Standardize NY variations
+            if preferences["location"] in ["ny", "n.y.", "n.y"]:
+                preferences["location"] = "new york"
+            # Handle "new york" variations
+            elif "new york" in preferences["location"] or "newyork" in preferences["location"].replace(" ", ""):
                 preferences["location"] = "new york"
 
         # Clean up experience
@@ -218,3 +214,133 @@ async def extract_job_preferences(user_input: str) -> Dict:
             "salary": None,
             "search_type": "specialized" if "technology" in user_input.lower() else "general"
         } 
+
+async def standardize_search_terms(preferences: Dict) -> Dict:
+    """
+    Standardize search terms using OpenAI to match database format.
+    Takes the extracted preferences and returns standardized versions.
+    """
+    try:
+        system_prompt = """You are a search term standardizer for a job database.
+        Your task is to convert user search terms into standardized database-friendly formats.
+        
+        For each term (role, location, experience), return:
+        1. A standardized version of the term
+        2. A list of common variations to use in database search
+        
+        Example input:
+        {
+            "role": "audit manager",
+            "location": "NY",
+            "experience": "manager level"
+        }
+        
+        Example output:
+        {
+            "role": {
+                "standardized": "audit manager",
+                "search_variations": ["audit manager", "auditing manager", "audit lead", "audit team manager"]
+            },
+            "location": {
+                "standardized": "new york",
+                "search_variations": ["new york", "ny", "nyc", "new york city"]
+            },
+            "experience": {
+                "standardized": "manager",
+                "search_variations": ["manager", "managerial", "management", "team lead"]
+            }
+        }
+        
+        Rules for standardization:
+        1. Locations: Convert to most common format
+           - "NY", "NYC", "New York City" -> "New York"
+           - "SF", "San Fran" -> "San Francisco"
+           
+        2. Job Titles/Roles: Standardize to common industry terms
+           - "Audit Manager", "Auditing Manager" -> "audit manager"
+           - "Tax Director", "Director of Tax" -> "tax director"
+           
+        3. Experience Levels: Convert to standard levels
+           - "Manager Level", "Managerial" -> "manager"
+           - "Director Position", "Director Level" -> "director"
+           
+        Return a JSON object with standardized terms and variations for each field."""
+
+        # Convert preferences to a formatted string for the AI
+        preferences_str = json.dumps(preferences, indent=2)
+        
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Standardize these search terms:\n{preferences_str}"}
+            ],
+            max_tokens=300,
+            temperature=0.3
+        )
+
+        # Initialize standardized structure with default values
+        standardized = {
+            "role": {"standardized": None, "search_variations": []},
+            "location": {"standardized": None, "search_variations": []},
+            "experience": {"standardized": None, "search_variations": []}
+        }
+
+        try:
+            # Parse and validate AI response
+            ai_response = json.loads(response.choices[0].message.content)
+            logger.debug(f"Raw AI response: {ai_response}")
+
+            # Validate and process each field
+            for field in ["role", "location", "experience"]:
+                if field in preferences and preferences[field]:
+                    field_data = ai_response.get(field, {})
+                    
+                    # Validate field structure
+                    if (isinstance(field_data, dict) and 
+                        "standardized" in field_data and 
+                        "search_variations" in field_data and 
+                        isinstance(field_data["search_variations"], list)):
+                        
+                        standardized[field] = {
+                            "standardized": str(field_data["standardized"]).lower().strip(),
+                            "search_variations": [str(var).lower().strip() 
+                                               for var in field_data["search_variations"] 
+                                               if isinstance(var, (str, int, float))]
+                        }
+                    else:
+                        # Fallback for invalid field structure
+                        standardized[field] = {
+                            "standardized": str(preferences[field]).lower().strip(),
+                            "search_variations": [str(preferences[field]).lower().strip()]
+                        }
+
+                    # Ensure search_variations is not empty and includes standardized term
+                    if not standardized[field]["search_variations"]:
+                        standardized[field]["search_variations"] = [standardized[field]["standardized"]]
+                    elif standardized[field]["standardized"] not in standardized[field]["search_variations"]:
+                        standardized[field]["search_variations"].append(standardized[field]["standardized"])
+
+            logger.debug(f"Standardized search terms: {standardized}")
+            return standardized
+
+        except json.JSONDecodeError as json_error:
+            logger.error(f"Failed to parse AI response as JSON: {response.choices[0].message.content}")
+            logger.error(f"JSON error: {str(json_error)}")
+            # Fall through to the default fallback mechanism
+
+    except Exception as e:
+        logger.error(f"Error standardizing search terms: {str(e)}", exc_info=True)
+
+    # Unified fallback mechanism for all error cases
+    fallback = {}
+    for key, value in preferences.items():
+        if value and key in ["role", "location", "experience"]:
+            value_str = str(value).lower().strip()
+            fallback[key] = {
+                "standardized": value_str,
+                "search_variations": [value_str]
+            }
+    
+    logger.info(f"Using fallback standardization: {fallback}")
+    return fallback 
