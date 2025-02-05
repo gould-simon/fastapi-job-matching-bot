@@ -1,89 +1,198 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+import os
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 from app.config import DATABASE_URL
 import logging
 from urllib.parse import urlparse, urlunparse
 from sqlalchemy.sql import text
+from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy import event
+from asyncpg.exceptions import ConnectionDoesNotExistError
+import asyncio
+import ssl
+from app.logging_config import db_logger, log_error
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)  # Set to DEBUG for more detailed logs
+logger.setLevel(logging.DEBUG)
 
-# Create Base class for models
-Base = declarative_base()
+# Create Base class for models using SQLAlchemy 2.0 style
+class Base(DeclarativeBase):
+    """Base class for SQLAlchemy models."""
+    pass
 
-# Ensure DATABASE_URL is set and properly formatted
-if DATABASE_URL is None:
-    raise ValueError("❌ DATABASE_URL is not set. Check your .env file!")
-
-# Parse the URL and add default port if not specified
-parsed = urlparse(DATABASE_URL)
-logger.debug(f"Initial database URL components: scheme={parsed.scheme}, hostname={parsed.hostname}, path={parsed.path}")
-
-if parsed.port is None:
-    # Add default PostgreSQL port (5432) if not specified
-    host_with_port = f"{parsed.hostname}:5432"
-    DATABASE_URL = DATABASE_URL.replace(parsed.hostname, host_with_port)
-    logger.info("Added default port 5432 to DATABASE_URL")
-
-# For Render's PostgreSQL, ensure we're using the correct hostname
-if "dpg-" in DATABASE_URL:
-    parsed = urlparse(DATABASE_URL)
-    # Extract the port if it exists
-    port = f":{parsed.port}" if parsed.port else ""
-    # Use the full Render hostname
-    render_hostname = f"{parsed.hostname}.oregon-postgres.render.com{port}"
-    # Reconstruct the URL with the new hostname
-    DATABASE_URL = DATABASE_URL.replace(f"{parsed.hostname}{port}", render_hostname)
-    logger.info(f"Using Render PostgreSQL hostname: {render_hostname}")
-
-# Convert standard postgresql:// to postgresql+asyncpg:// if needed
-if DATABASE_URL.startswith('postgresql://'):
-    DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://', 1)
-    logger.info("Converted DATABASE_URL to use asyncpg driver")
-
-# Log final database connection details (without credentials)
-final_parsed = urlparse(DATABASE_URL)
-safe_url = f"{final_parsed.scheme}://{final_parsed.hostname}:{final_parsed.port}{final_parsed.path}"
-logger.info(f"Final database connection URL (without credentials): {safe_url}")
-
-# Create async database engine with connection pooling
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=True,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    connect_args={
-        "command_timeout": 30,  # 30 seconds command timeout
-        "server_settings": {
-            "application_name": "FastAPI Job Bot",
-            "statement_timeout": "30000",  # 30 seconds statement timeout
-            "idle_in_transaction_session_timeout": "30000"  # 30 seconds idle timeout
-        }
+# Database configuration
+def get_db_config():
+    """Get database configuration with proper SSL and connection settings."""
+    config = {
+        "future": True,
+        "echo": True,
+        "pool_size": 20,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,  # Recycle connections after 30 minutes
+        "poolclass": AsyncAdaptedQueuePool,
     }
-)
+    
+    # Add SSL configuration for production
+    if os.getenv("ENVIRONMENT") == "production":
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        config["connect_args"] = {"ssl": ssl_context}
+    
+    return config
 
-# Create session factory with proper configuration
-SessionLocal = sessionmaker(
-    bind=engine,
+# Get database URL and configuration
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+db_config = get_db_config()
+
+# Configure for different environments
+if "pytest" in os.environ.get("PYTEST_CURRENT_TEST", ""):
+    DATABASE_URL = "sqlite+aiosqlite:///./test.db"
+    logger.info("Using SQLite for testing")
+    db_config = {"future": True, "echo": True}
+
+# For production PostgreSQL
+if DATABASE_URL.startswith("postgresql://"):
+    parsed = urlparse(DATABASE_URL)
+    
+    # Add default port if not specified
+    if parsed.port is None:
+        host_with_port = f"{parsed.hostname}:5432"
+        DATABASE_URL = DATABASE_URL.replace(parsed.hostname, host_with_port)
+    
+    # Handle Render.com PostgreSQL
+    if "dpg-" in DATABASE_URL:
+        parsed = urlparse(DATABASE_URL)
+        port = f":{parsed.port}" if parsed.port else ""
+        render_hostname = f"{parsed.hostname}.oregon-postgres.render.com{port}"
+        DATABASE_URL = DATABASE_URL.replace(f"{parsed.hostname}{port}", render_hostname)
+    
+    # Convert to async driver
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+# Create engine with retry logic
+engine = create_async_engine(DATABASE_URL, **db_config)
+
+# Add connection event listeners with enhanced logging
+@event.listens_for(engine.sync_engine, "connect")
+def connect(dbapi_connection, connection_record):
+    db_logger.info("New database connection established", extra={
+        'connection_id': id(dbapi_connection),
+        'pool_id': id(connection_record)
+    })
+
+@event.listens_for(engine.sync_engine, "checkout")
+def checkout(dbapi_connection, connection_record, connection_proxy):
+    db_logger.debug("Database connection checked out from pool", extra={
+        'connection_id': id(dbapi_connection),
+        'pool_id': id(connection_record)
+    })
+
+@event.listens_for(engine.sync_engine, "checkin")
+def checkin(dbapi_connection, connection_record):
+    db_logger.debug("Database connection returned to pool", extra={
+        'connection_id': id(dbapi_connection),
+        'pool_id': id(connection_record)
+    })
+
+@event.listens_for(engine.sync_engine, "reset")
+def reset(dbapi_connection, connection_record):
+    db_logger.info("Database connection reset", extra={
+        'connection_id': id(dbapi_connection),
+        'pool_id': id(connection_record)
+    })
+
+# Add error handling for connection pool
+@event.listens_for(engine.sync_engine, "invalidate")
+def invalidate(dbapi_connection, connection_record, exception):
+    log_error(db_logger, exception, context={
+        'action': 'connection_invalidate',
+        'connection_id': id(dbapi_connection),
+        'pool_id': id(connection_record)
+    })
+
+# Create session factory with custom retry logic
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Get a database session with retry logic."""
+    retries = 3
+    retry_delay = 1  # seconds
+    
+    for attempt in range(retries):
+        try:
+            async with AsyncSessionLocal() as session:
+                try:
+                    db_logger.debug("Database session created")
+                    yield session
+                    await session.commit()
+                    db_logger.debug("Session committed successfully")
+                except Exception as e:
+                    await session.rollback()
+                    log_error(db_logger, e, context={
+                        'action': 'session_commit',
+                        'attempt': attempt + 1
+                    })
+                    raise
+                finally:
+                    await session.close()
+                    db_logger.debug("Session closed")
+        except ConnectionDoesNotExistError as e:
+            if attempt == retries - 1:
+                log_error(db_logger, e, context={
+                    'action': 'connection_retry',
+                    'attempt': attempt + 1,
+                    'max_retries': retries
+                })
+                raise
+            db_logger.warning(
+                f"Database connection failed, retrying in {retry_delay}s",
+                extra={
+                    'attempt': attempt + 1,
+                    'retry_delay': retry_delay,
+                    'error': str(e)
+                }
+            )
+            await asyncio.sleep(retry_delay)
+            retry_delay *= 2  # Exponential backoff
+        except Exception as e:
+            log_error(db_logger, e, context={
+                'action': 'session_creation',
+                'attempt': attempt + 1
+            })
+            raise
+
+# Create async session factory
+AsyncSessionLocal = sessionmaker(
+    engine,
     class_=AsyncSession,
     expire_on_commit=False,
-    autocommit=False,
-    autoflush=False
 )
+
+# Dependency to get DB session
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async for session in get_session():
+        yield session
 
 async def list_all_tables():
     """List all tables in the database"""
     try:
-        async with SessionLocal() as session:
-            query = text("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public'
-                ORDER BY table_name;
-            """)
+        async with AsyncSessionLocal() as session:
+            if DATABASE_URL.startswith("sqlite"):
+                query = text("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name;
+                """)
+            else:
+                query = text("""
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name;
+                """)
             result = await session.execute(query)
             tables = [row[0] for row in result]
             logger.info(f"Found tables: {tables}")
@@ -95,36 +204,66 @@ async def list_all_tables():
 async def test_database_connection():
     """Test the database connection and verify schema"""
     try:
-        async with SessionLocal() as session:
+        async with AsyncSessionLocal() as session:
             # Test basic connection
             await session.execute(text("SELECT 1"))
-            logger.info("✅ Basic database connection successful")
+            db_logger.info("✅ Basic database connection successful")
             
             # List all tables first
             all_tables = await list_all_tables()
-            logger.info(f"All tables in database: {all_tables}")
+            db_logger.info(f"All tables in database: {all_tables}")
             
-            # Check if required tables exist
-            tables_query = text("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name IN ('JobsApp_job', 'JobsApp_accountingfirm', 'users', 'user_searches')
-            """)
-            result = await session.execute(tables_query)
-            existing_tables = set(row[0] for row in result)
-            required_tables = {'JobsApp_job', 'JobsApp_accountingfirm', 'users', 'user_searches'}
+            # Check if required tables exist (case-insensitive)
+            required_tables = {
+                'users', 'jobsapp_job', 'jobsapp_accountingfirm', 
+                'user_searches', 'user_conversations', 'job_matches',
+                'job_embeddings'
+            }
+            existing_tables = {t.lower() for t in all_tables}
             missing_tables = required_tables - existing_tables
             
             if missing_tables:
-                logger.error(f"❌ Missing required tables: {', '.join(missing_tables)}")
-                logger.info(f"Found tables: {', '.join(existing_tables)}")
-                return False, f"Missing required tables: {', '.join(missing_tables)}"
+                error_msg = f"Missing required tables: {', '.join(missing_tables)}"
+                db_logger.error(error_msg, extra={
+                    'existing_tables': list(existing_tables),
+                    'missing_tables': list(missing_tables)
+                })
+                return False, error_msg
             
-            logger.info(f"✅ All required tables exist: {', '.join(existing_tables)}")
+            db_logger.info("✅ All required tables exist", extra={
+                'tables': list(existing_tables)
+            })
             return True, "Database connection and schema verification successful"
             
     except Exception as e:
-        error_message = str(e)
-        logger.error(f"❌ Database connection test failed: {error_message}", exc_info=True)
-        return False, f"Connection error: {error_message}"
+        log_error(db_logger, e, context={
+            'action': 'connection_test',
+            'database_url': DATABASE_URL.replace(
+                parsed.password, '****'
+            ) if parsed.password else DATABASE_URL
+        })
+        return False, f"Connection error: {str(e)}"
+
+# Database verification functions
+async def verify_database_indexes():
+    """Verify that all required indexes exist."""
+    async with AsyncSessionLocal() as session:
+        # Check and create indexes if needed
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_user_telegram_id ON users(telegram_id)",
+            "CREATE INDEX IF NOT EXISTS idx_job_matches_score ON job_matches(similarity_score)",
+            "CREATE INDEX IF NOT EXISTS idx_job_location ON jobsapp_job(location)",
+            "CREATE INDEX IF NOT EXISTS idx_job_title ON jobsapp_job(job_title)",
+            "CREATE INDEX IF NOT EXISTS idx_user_last_active ON users(last_active)",
+            "CREATE INDEX IF NOT EXISTS idx_conversation_created ON user_conversations(created_at)",
+        ]
+        
+        for index in indexes:
+            try:
+                await session.execute(text(index))
+            except Exception as e:
+                logger.error(f"Failed to create index: {str(e)}")
+                continue
+        
+        await session.commit()
+        logger.info("Database indexes verified")

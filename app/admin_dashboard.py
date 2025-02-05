@@ -6,6 +6,19 @@ from urllib.parse import urlparse
 import logging
 import sqlite3
 import json
+from fastapi import FastAPI, HTTPException, Query, APIRouter
+from fastapi.responses import JSONResponse
+from app.models import User, UserSearch, UserConversation, JobMatch
+from app.database import get_db
+import pandas as pd
+from typing import List, Dict, Any, Optional
+from sqlalchemy import func, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import select
+from fastapi import Depends
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import text
+from app.database import engine
 
 # At the top of the file, add logging
 logger = logging.getLogger(__name__)
@@ -336,3 +349,243 @@ try:
 except Exception as e:
     st.error(f"Dashboard error: {str(e)}")
     logger.error(f"Dashboard error: {str(e)}", exc_info=True)
+
+app = FastAPI(title="Job Matching Bot Admin Dashboard")
+
+router = APIRouter(prefix="/api/admin")
+
+async_session_maker = sessionmaker(
+    engine, class_=AsyncSession, expire_on_commit=False
+)
+
+# Mount the router
+app.include_router(router)
+
+@router.get("/overview")
+async def get_dashboard_overview():
+    """Get overview statistics for the admin dashboard"""
+    try:
+        async with async_session_maker() as session:
+            # Get total users
+            result = await session.execute(text("SELECT count(telegram_id) FROM users"))
+            total_users = result.scalar() or 0
+
+            # Get active users in last 24h
+            one_day_ago = datetime.now() - timedelta(days=1)
+            result = await session.execute(
+                text("SELECT count(DISTINCT telegram_id) FROM users WHERE last_active >= :date"),
+                {"date": one_day_ago}
+            )
+            active_users_24h = result.scalar() or 0
+
+            # Get recent searches
+            result = await session.execute(
+                text("SELECT count(*) FROM user_searches WHERE created_at >= :date"),
+                {"date": one_day_ago}
+            )
+            recent_searches = result.scalar() or 0
+
+            # Get recent conversations
+            result = await session.execute(
+                text("SELECT count(*) FROM user_conversations WHERE created_at >= :date"),
+                {"date": one_day_ago}
+            )
+            recent_conversations = result.scalar() or 0
+
+            # Get recent job matches
+            result = await session.execute(
+                text("SELECT count(*) FROM job_matches WHERE created_at >= :date"),
+                {"date": one_day_ago}
+            )
+            recent_matches = result.scalar() or 0
+
+            return {
+                "total_users": total_users,
+                "active_users_24h": active_users_24h,
+                "recent_searches": recent_searches,
+                "recent_conversations": recent_conversations,
+                "recent_matches": recent_matches
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting dashboard overview: {str(e)}")
+
+@router.get("/user-activity")
+async def get_user_activity(
+    start_date: str = Query(None, description="Start date in YYYY-MM-DD format"),
+    end_date: str = Query(None, description="End date in YYYY-MM-DD format"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get user activity metrics for a date range."""
+    try:
+        # Validate date parameters
+        if start_date:
+            try:
+                datetime.strptime(start_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid start_date format. Use YYYY-MM-DD"
+                )
+        
+        if end_date:
+            try:
+                datetime.strptime(end_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid end_date format. Use YYYY-MM-DD"
+                )
+
+        # Rest of the function implementation
+        query = text("""
+            SELECT DATE(timestamp) as date,
+                   COUNT(*) as total_actions,
+                   COUNT(DISTINCT user_id) as unique_users
+            FROM user_activity_log
+            WHERE (:start_date IS NULL OR DATE(timestamp) >= DATE(:start_date))
+            AND (:end_date IS NULL OR DATE(timestamp) <= DATE(:end_date))
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
+        """)
+        
+        result = await db.execute(query, {"start_date": start_date, "end_date": end_date})
+        activity_data = [dict(row) for row in result]
+        
+        return {
+            "activity": activity_data,
+            "total_actions": sum(day["total_actions"] for day in activity_data),
+            "unique_users": len(set(day["unique_users"] for day in activity_data))
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user activity: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@router.get("/search-analytics")
+async def get_search_analytics(start_date: Optional[datetime] = None):
+    """Get search analytics data"""
+    try:
+        if not start_date:
+            start_date = datetime.now() - timedelta(days=7)
+
+        async with async_session_maker() as session:
+            # Get popular search terms
+            result = await session.execute(
+                text("""
+                    SELECT search_query, COUNT(*) as count
+                    FROM user_searches
+                    WHERE created_at >= :start_date
+                    GROUP BY search_query
+                    ORDER BY count DESC
+                    LIMIT 10
+                """),
+                {"start_date": start_date}
+            )
+            rows = result.fetchall()
+            
+            return {
+                "popular_searches": [
+                    {"term": row[0], "count": row[1]} for row in rows
+                ]
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting search analytics: {str(e)}")
+
+@router.get("/conversation-analytics")
+async def get_conversation_analytics(start_date: Optional[datetime] = None):
+    """Get conversation analytics data"""
+    try:
+        if not start_date:
+            start_date = datetime.now() - timedelta(days=7)
+
+        async with async_session_maker() as session:
+            # Get total conversations
+            result = await session.execute(
+                text("""
+                    SELECT COUNT(*) as total
+                    FROM user_conversations
+                    WHERE created_at >= :start_date
+                """),
+                {"start_date": start_date}
+            )
+            total_conversations = result.scalar() or 0
+
+            # Get conversation volume over time
+            result = await session.execute(
+                text("""
+                    SELECT DATE(created_at) as date, COUNT(*) as count
+                    FROM user_conversations
+                    WHERE created_at >= :start_date
+                    GROUP BY DATE(created_at)
+                    ORDER BY date
+                """),
+                {"start_date": start_date}
+            )
+            rows = result.fetchall()
+            
+            return {
+                "total_conversations": total_conversations,
+                "conversation_trend": {
+                    "dates": [row[0] for row in rows],
+                    "counts": [row[1] for row in rows]
+                }
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting conversation analytics: {str(e)}")
+
+@router.get("/users/{user_id}")
+async def get_user_details(user_id: int):
+    """Get detailed information about a specific user"""
+    try:
+        async with async_session_maker() as session:
+            result = await session.execute(
+                text("SELECT * FROM users WHERE id = :user_id"),
+                {"user_id": user_id}
+            )
+            user = result.fetchone()
+            
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Get user's recent activity
+            searches_result = await session.execute(
+                text("""
+                    SELECT search_query, created_at
+                    FROM user_searches
+                    WHERE user_id = :user_id
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                """),
+                {"user_id": user_id}
+            )
+            recent_searches = searches_result.fetchall()
+            
+            conversations_result = await session.execute(
+                text("""
+                    SELECT message_text, created_at
+                    FROM user_conversations
+                    WHERE user_id = :user_id
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                """),
+                {"user_id": user_id}
+            )
+            recent_conversations = conversations_result.fetchall()
+            
+            return {
+                "user_info": dict(user),
+                "recent_searches": [
+                    {"query": row[0], "timestamp": row[1]} 
+                    for row in recent_searches
+                ],
+                "recent_conversations": [
+                    {"message": row[0], "timestamp": row[1]}
+                    for row in recent_conversations
+                ]
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting user details: {str(e)}")

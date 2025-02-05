@@ -1,121 +1,123 @@
+import os
 import logging
 import json
 from datetime import datetime
-from typing import Any, Dict
-from fastapi import Request, Response
-import time
 from logging.handlers import RotatingFileHandler
-import os
 from pythonjsonlogger import jsonlogger
+import traceback
+from typing import Dict, Any, Optional
 
 # Ensure logs directory exists
 os.makedirs('logs', exist_ok=True)
 
-class CustomJSONFormatter(jsonlogger.JsonFormatter):
+class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    """Custom JSON formatter with additional fields."""
     def add_fields(self, log_record: Dict[str, Any], record: logging.LogRecord, message_dict: Dict[str, Any]) -> None:
         super().add_fields(log_record, record, message_dict)
-        log_record['timestamp'] = datetime.utcnow().isoformat()
-        log_record['level'] = record.levelname
-        log_record['logger'] = record.name
+        
+        # Add timestamp if not present
+        if not log_record.get('timestamp'):
+            log_record['timestamp'] = datetime.utcnow().isoformat()
+        
+        # Add log level
+        if log_record.get('level'):
+            log_record['level'] = log_record['level'].upper()
+        else:
+            log_record['level'] = record.levelname
+            
+        # Add file and line number
+        log_record['file'] = record.filename
+        log_record['line'] = record.lineno
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_record['exc_info'] = self.formatException(record.exc_info)
+            log_record['exc_type'] = record.exc_info[0].__name__
+            
+        # Add stack trace for errors
+        if record.levelno >= logging.ERROR:
+            log_record['stack_trace'] = traceback.format_stack()
 
-def setup_api_logging():
-    """Configure JSON logging for API monitoring"""
-    logger = logging.getLogger("api")
-    logger.setLevel(logging.INFO)
+class ErrorContextFilter(logging.Filter):
+    """Filter that adds context to error logs."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, 'error_context'):
+            record.error_context = {}
+        return True
+
+def get_logger(name: str) -> logging.Logger:
+    """Get a logger with the specified name and enhanced configuration."""
+    logger = logging.getLogger(name)
     
-    # Create JSON formatter
-    formatter = CustomJSONFormatter(
-        '%(timestamp)s %(level)s %(name)s %(message)s'
-    )
-    
-    # File handler for API logs
-    file_handler = RotatingFileHandler(
-        'logs/api.log',
-        maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
-    )
-    file_handler.setFormatter(formatter)
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    if not logger.handlers:  # Only add handlers if they don't exist
+        logger.setLevel(logging.DEBUG)
+        
+        # Create console handler with basic formatting
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        console_handler.setFormatter(console_formatter)
+        
+        # Create JSON file handler for detailed logging
+        json_handler = RotatingFileHandler(
+            'logs/app.json',
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        json_handler.setLevel(logging.DEBUG)
+        json_formatter = CustomJsonFormatter(
+            '%(timestamp)s %(level)s %(name)s %(message)s'
+        )
+        json_handler.setFormatter(json_formatter)
+        
+        # Create separate error log handler
+        error_handler = RotatingFileHandler(
+            'logs/error.log',
+            maxBytes=10*1024*1024,
+            backupCount=5,
+            encoding='utf-8'
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(json_formatter)
+        
+        # Add handlers
+        logger.addHandler(console_handler)
+        logger.addHandler(json_handler)
+        logger.addHandler(error_handler)
+        
+        # Add context filter
+        logger.addFilter(ErrorContextFilter())
     
     return logger
 
-# Create API logger instance
-api_logger = setup_api_logging()
+def log_error(logger: logging.Logger, error: Exception, context: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Log an error with enhanced context and formatting.
+    
+    Args:
+        logger: The logger instance to use
+        error: The exception to log
+        context: Additional context to include in the log
+    """
+    error_info = {
+        'error_type': error.__class__.__name__,
+        'error_message': str(error),
+        'traceback': traceback.format_exc(),
+        'context': context or {}
+    }
+    
+    logger.error(
+        f"Error occurred: {error}",
+        extra={
+            'error_context': error_info
+        },
+        exc_info=True
+    )
 
-class APILoggingMiddleware:
-    async def __call__(self, request: Request, call_next) -> Response:
-        start_time = time.time()
-        
-        # Log request
-        request_body = await self._get_request_body(request)
-        api_logger.info(
-            "API Request",
-            extra={
-                "request": {
-                    "method": request.method,
-                    "url": str(request.url),
-                    "headers": dict(request.headers),
-                    "body": request_body,
-                    "client_ip": request.client.host if request.client else None,
-                },
-                "event_type": "api_request"
-            }
-        )
-        
-        # Process the request
-        try:
-            response = await call_next(request)
-            response_body = await self._get_response_body(response)
-            
-            # Log response
-            api_logger.info(
-                "API Response",
-                extra={
-                    "response": {
-                        "status_code": response.status_code,
-                        "headers": dict(response.headers),
-                        "body": response_body,
-                    },
-                    "duration_ms": round((time.time() - start_time) * 1000, 2),
-                    "event_type": "api_response"
-                }
-            )
-            
-            return response
-            
-        except Exception as e:
-            api_logger.error(
-                "API Error",
-                extra={
-                    "error": {
-                        "type": type(e).__name__,
-                        "message": str(e),
-                    },
-                    "duration_ms": round((time.time() - start_time) * 1000, 2),
-                    "event_type": "api_error"
-                },
-                exc_info=True
-            )
-            raise
-    
-    async def _get_request_body(self, request: Request) -> Dict:
-        """Safely get request body"""
-        try:
-            body = await request.json()
-            return body
-        except:
-            return {}
-    
-    async def _get_response_body(self, response: Response) -> Dict:
-        """Safely get response body"""
-        try:
-            body = response.body.decode()
-            return json.loads(body)
-        except:
-            return {} 
+# Create main application logger
+api_logger = get_logger('api')
+bot_logger = get_logger('bot')
+db_logger = get_logger('db') 

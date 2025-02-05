@@ -11,9 +11,21 @@ logger = logging.getLogger(__name__)
 
 async def get_ai_response(user_input: str, context: Optional[str] = None) -> str:
     try:
-        system_prompt = """You are a helpful job-matching assistant for accounting professionals. 
-        Your goal is to help users find relevant jobs and provide career guidance. 
-        Keep responses concise and professional."""
+        system_prompt = """You are a knowledgeable job-matching assistant for accounting professionals, with expertise in audit, tax, and advisory roles.
+
+        Your responsibilities:
+        1. Provide specific, actionable job search advice
+        2. Help users understand different accounting roles and career paths
+        3. Give clear, concise responses that directly address the user's query
+        4. If you don't know something, be honest and suggest alternatives
+
+        Key areas of expertise:
+        - Big 4 and mid-tier accounting firms
+        - Audit, Tax, and Advisory service lines
+        - Career progression in accounting
+        - Professional qualifications (CPA, ACCA, etc.)
+        
+        Keep responses professional but friendly, and always end with a clear next step or call to action."""
         
         user_message = f"Context: {context}\nUser input: {user_input}" if context else user_input
         
@@ -23,14 +35,23 @@ async def get_ai_response(user_input: str, context: Optional[str] = None) -> str
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            max_tokens=300,
+            max_tokens=500,  # Increased token limit for more detailed responses
             temperature=0.7
         )
+        
+        # Log the response for monitoring
+        logger.debug(f"AI Response generated for input: {user_input[:50]}...")
+        logger.debug(f"Response length: {len(response.choices[0].message.content)} chars")
         
         return response.choices[0].message.content
         
     except Exception as e:
-        return f"I apologize, but I'm having trouble processing your request. Please try again later. Error: {str(e)}"
+        logger.error(f"Error in get_ai_response: {str(e)}", exc_info=True)
+        return ("I apologize, but I'm having trouble processing your request right now. "
+                "Please try:\n"
+                "1. Using /search_jobs for job searches\n"
+                "2. Being more specific in your question\n"
+                "3. Breaking down complex queries into simpler ones")
 
 async def process_cv(file_path: str) -> str:
     """Extract text from CV and process it"""
@@ -96,124 +117,83 @@ async def process_cv(file_path: str) -> str:
         if os.path.exists(file_path):
             os.remove(file_path)
 
-async def extract_job_preferences(user_input: str) -> Dict:
-    """
-    Extract structured job preferences from natural language input.
-    Returns a dictionary with role, location, experience, and salary preferences.
-    """
+async def extract_job_preferences(user_input: str) -> Dict[str, Optional[str]]:
+    """Extract job preferences from user input using OpenAI's API."""
     try:
-        system_prompt = """You are an AI assistant that extracts job search preferences from natural language input.
-        Extract the following fields if present:
-        - role (job title/position)
-        - location (city, state, or country)
-        - experience (years or level)
-        - salary (salary range or expectations)
-        
-        Special handling for role extraction:
-        1. Standard Job Titles - Keep these exact matches together:
-           - "audit manager", "audit senior", "audit director"
-           - "tax manager", "tax director", "tax senior"
-           - "advisory manager", "advisory director"
-           These are specific job titles and should be treated as single units.
-        
-        2. Service Line + Specialization - Keep these combinations together:
-           - Service lines (Audit, Tax, Advisory) + Specializations (technology, data, digital)
-           Examples:
-           - "audit technology" -> role: "audit technology"
-           - "tax data analyst" -> role: "tax data analyst"
-           - "advisory digital consultant" -> role: "advisory digital consultant"
-        
-        3. Seniority/Experience Level - Extract this separately from the role:
-           - When someone mentions "manager level" or "director level", put this in the experience field
-           - Examples:
-             Input: "audit technology roles in new york for manager or director level"
-             Output: {
-               "role": "audit technology",
-               "location": "new york",
-               "experience": "manager or director",
-               "search_type": "specialized"
-             }
-        
-        4. Additional metadata - Add a 'search_type' field to indicate the type of search:
-           - 'job_title' for standard job titles (e.g., "audit manager")
-           - 'specialized' for service line + specialization searches (e.g., "audit technology")
-           - 'general' for other searches
-        
-        Return a JSON object with these fields. If a field is not mentioned, set it to null.
-        Always ensure the response is valid JSON format."""
+        # Prepare the prompt for GPT
+        prompt = f"""Extract job search preferences from the following user input:
+"{user_input}"
 
-        logger.debug(f"Extracting preferences from input: {user_input}")
+Please extract the following fields:
+- role (job title or function)
+- location (city or region)
+- experience (standardize to these exact terms):
+  * "senior" for senior/experienced/senior level
+  * "manager" for manager/managerial
+  * "manager or director" for manager or director level
+  * null if not specified
+- salary (if mentioned)
+- search_type (use these rules):
+  * "job_title" when the input is a specific job title (e.g. "audit manager", "tax director")
+  * "specialized" when the input describes a broader role or has multiple criteria (e.g. "audit technology roles", "senior level positions")
+
+Format the response as a JSON object with these exact field names. If a field is not mentioned, set it to null.
+For experience, use ONLY the standardized terms listed above.
+
+Example outputs:
+{{
+    "role": "audit manager",
+    "location": "new york",
+    "experience": null,
+    "salary": null,
+    "search_type": "job_title"  # specific job title
+}}
+
+{{
+    "role": "audit technology",
+    "location": "boston",
+    "experience": "senior",  # standardized from "senior level"
+    "salary": null,
+    "search_type": "specialized"  # broader role description
+}}
+
+{{
+    "role": "tax director",
+    "location": "chicago",
+    "experience": "manager or director",  # standardized from "manager or director level"
+    "salary": "150k+",
+    "search_type": "job_title"  # specific job title
+}}
+"""
+
+        # Call OpenAI API
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input}
+                {"role": "system", "content": "You are a helpful assistant that extracts job search preferences from user input. Use exact standardized terms for experience levels and be precise about search_type classification."},
+                {"role": "user", "content": prompt}
             ],
-            max_tokens=150,
-            temperature=0.3
+            temperature=0,
+            max_tokens=150
         )
 
-        # Get the response content
-        content = response.choices[0].message.content.strip()
-        logger.debug(f"Raw AI response: {content}")
-
-        try:
-            # Parse the response into a dictionary
-            preferences = json.loads(content)
-        except json.JSONDecodeError as json_error:
-            logger.error(f"Failed to parse AI response as JSON: {content}")
-            logger.error(f"JSON error: {str(json_error)}")
-            
-            # Attempt to extract information manually
-            preferences = {
-                "role": "audit technology" if "audit technology" in user_input.lower() else None,
-                "location": "new york" if "new york" in user_input.lower() else None,
-                "experience": "manager or director" if "manager" in user_input.lower() or "director" in user_input.lower() else None,
-                "salary": None,
-                "search_type": "specialized" if "technology" in user_input.lower() else "general"
-            }
-
-        # Validate and clean the structure
-        required_keys = {"role", "location", "experience", "salary", "search_type"}
-        for key in required_keys:
-            if key not in preferences:
-                preferences[key] = None
-            elif preferences[key] == "":
-                preferences[key] = None
-
-        # Clean up location
-        if preferences.get("location"):
-            preferences["location"] = preferences["location"].lower().strip()
-            # Standardize NY variations
-            if preferences["location"] in ["ny", "n.y.", "n.y"]:
-                preferences["location"] = "new york"
-            # Handle "new york" variations
-            elif "new york" in preferences["location"] or "newyork" in preferences["location"].replace(" ", ""):
-                preferences["location"] = "new york"
-
-        # Clean up experience
-        if preferences.get("experience"):
-            exp = preferences["experience"].lower()
-            if "manager" in exp or "director" in exp:
-                preferences["experience"] = "manager or director"
-
-        # Set search type for specialized searches
-        if preferences.get("role") and "technology" in preferences["role"].lower():
-            preferences["search_type"] = "specialized"
-
+        # Parse the response
+        preferences = json.loads(response.choices[0].message.content)
+        
+        # Ensure all required fields are present
+        required_fields = ["role", "location", "experience", "salary", "search_type"]
+        for field in required_fields:
+            if field not in preferences:
+                preferences[field] = None
+        
+        # Log the extracted preferences
         logger.info(f"Extracted preferences: {preferences}")
+        
         return preferences
 
     except Exception as e:
-        logger.error(f"Error extracting job preferences: {str(e)}", exc_info=True)
-        # Fallback to basic extraction
-        return {
-            "role": "audit technology" if "audit technology" in user_input.lower() else None,
-            "location": "new york" if "new york" in user_input.lower() else None,
-            "experience": "manager or director" if "manager" in user_input.lower() or "director" in user_input.lower() else None,
-            "salary": None,
-            "search_type": "specialized" if "technology" in user_input.lower() else "general"
-        } 
+        logger.error(f"Error extracting job preferences: {str(e)}")
+        raise
 
 async def standardize_search_terms(preferences: Dict) -> Dict:
     """
@@ -226,7 +206,7 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
         
         For each term (role, location, experience), return:
         1. A standardized version of the term
-        2. A list of common variations to use in database search
+        2. A comprehensive list of common variations to use in database search
         
         Example input:
         {
@@ -239,31 +219,38 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
         {
             "role": {
                 "standardized": "audit manager",
-                "search_variations": ["audit manager", "auditing manager", "audit lead", "audit team manager"]
+                "search_variations": ["audit manager", "auditing manager", "audit lead", "audit team manager", "audit department manager", "manager of audit"]
             },
             "location": {
                 "standardized": "new york",
-                "search_variations": ["new york", "ny", "nyc", "new york city"]
+                "search_variations": ["new york", "ny", "nyc", "new york city", "manhattan"]
             },
             "experience": {
                 "standardized": "manager",
-                "search_variations": ["manager", "managerial", "management", "team lead"]
+                "search_variations": ["manager", "managerial", "management", "team lead", "team manager"]
             }
         }
         
         Rules for standardization:
-        1. Locations: Convert to most common format
-           - "NY", "NYC", "New York City" -> "New York"
-           - "SF", "San Fran" -> "San Francisco"
+        1. Locations: Convert to most common format and include ALL common variations
+           - For "New York": include ["new york", "ny", "nyc", "manhattan"]
+           - For "Boston": include ["boston", "ma", "massachusetts", "boston ma", "greater boston"]
+           - For "San Francisco": include ["san francisco", "sf", "bay area", "silicon valley"]
            
-        2. Job Titles/Roles: Standardize to common industry terms
-           - "Audit Manager", "Auditing Manager" -> "audit manager"
-           - "Tax Director", "Director of Tax" -> "tax director"
+        2. Job Titles/Roles: Include ALL common variations and combinations
+           - For "Technology Audit": include ["technology audit", "it audit", "tech audit", "information technology audit", "technology assurance"]
+           - For "Audit Manager": include ["audit manager", "auditing manager", "audit lead", "audit team manager", "manager of audit"]
            
-        3. Experience Levels: Convert to standard levels
-           - "Manager Level", "Managerial" -> "manager"
-           - "Director Position", "Director Level" -> "director"
+        3. Experience Levels: Include ALL common variations and related terms
+           - For "Manager": include ["manager", "management", "managerial", "team lead", "team manager"]
+           - For "Senior": include ["senior", "senior level", "experienced", "advanced", "sr"]
            
+        IMPORTANT: 
+        - Include ALL common variations and synonyms
+        - For locations, include city name, state abbreviation, and full state name
+        - For roles, include different word orders and common industry terms
+        - For experience, include both formal and informal variations
+        
         Return a JSON object with standardized terms and variations for each field."""
 
         # Convert preferences to a formatted string for the AI
@@ -275,8 +262,8 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Standardize these search terms:\n{preferences_str}"}
             ],
-            max_tokens=300,
-            temperature=0.3
+            max_tokens=800,
+            temperature=0.2
         )
 
         # Initialize standardized structure with default values
@@ -304,43 +291,16 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
                         
                         standardized[field] = {
                             "standardized": str(field_data["standardized"]).lower().strip(),
-                            "search_variations": [str(var).lower().strip() 
-                                               for var in field_data["search_variations"] 
-                                               if isinstance(var, (str, int, float))]
-                        }
-                    else:
-                        # Fallback for invalid field structure
-                        standardized[field] = {
-                            "standardized": str(preferences[field]).lower().strip(),
-                            "search_variations": [str(preferences[field]).lower().strip()]
+                            "search_variations": sorted(set(str(var).lower().strip() 
+                                               for var in field_data["search_variations"]))
                         }
 
-                    # Ensure search_variations is not empty and includes standardized term
-                    if not standardized[field]["search_variations"]:
-                        standardized[field]["search_variations"] = [standardized[field]["standardized"]]
-                    elif standardized[field]["standardized"] not in standardized[field]["search_variations"]:
-                        standardized[field]["search_variations"].append(standardized[field]["standardized"])
-
-            logger.debug(f"Standardized search terms: {standardized}")
             return standardized
 
-        except json.JSONDecodeError as json_error:
-            logger.error(f"Failed to parse AI response as JSON: {response.choices[0].message.content}")
-            logger.error(f"JSON error: {str(json_error)}")
-            # Fall through to the default fallback mechanism
-
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response: {str(e)}")
+            raise
+            
     except Exception as e:
-        logger.error(f"Error standardizing search terms: {str(e)}", exc_info=True)
-
-    # Unified fallback mechanism for all error cases
-    fallback = {}
-    for key, value in preferences.items():
-        if value and key in ["role", "location", "experience"]:
-            value_str = str(value).lower().strip()
-            fallback[key] = {
-                "standardized": value_str,
-                "search_variations": [value_str]
-            }
-    
-    logger.info(f"Using fallback standardization: {fallback}")
-    return fallback 
+        logger.error(f"Error in standardize_search_terms: {str(e)}")
+        raise 

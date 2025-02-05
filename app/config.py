@@ -18,6 +18,11 @@ if not DATABASE_URL:
 if "username:password@host:port" in DATABASE_URL:
     raise ValueError("DATABASE_URL contains placeholder values. Please set the actual database URL in .env file")
 
+# OpenAI Configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+
 # Debug output
 logger.info(f"Environment file loaded: {os.path.exists('.env')}")
 logger.info(f"DATABASE_URL type: {type(DATABASE_URL)}")

@@ -5,17 +5,70 @@ app = "fastapi-job-matching-bot"
 
 [env]
   PORT = "8080"
-  PYTHON_VERSION = "3.8.20"
+  PYTHON_VERSION = "3.11"
   ENVIRONMENT = "production"
+  WORKERS_PER_CORE = "1"
+  WEB_CONCURRENCY = "4"
+  LOG_LEVEL = "info"
+  MAX_WORKERS = "8"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+[metrics]
+  port = 9091
+  path = "/metrics"
+
+[deploy]
+  release_command = "alembic upgrade head"
+  strategy = "rolling"
 
 [[services]]
-  internal_port = 8080
   protocol = "tcp"
+  internal_port = 8080
+  processes = ["app"]
 
   [[services.ports]]
-    handlers = ["http"]
     port = "80"
+    handlers = ["http"]
+    force_https = true
 
   [[services.ports]]
-    handlers = ["tls", "http"]
     port = "443"
+    handlers = ["tls", "http"]
+  
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "1s"
+
+  # Configure autoscaling
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+  [[services.http_checks]]
+    interval = "10s"
+    timeout = "2s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    tls_skip_verify = true
+
+[mounts]
+  source = "data"
+  destination = "/data"

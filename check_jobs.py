@@ -1,9 +1,9 @@
-from app.database import SessionLocal
+from app.database import AsyncSessionLocal
 import asyncio
 from sqlalchemy import text
 
 async def check_jobs():
-    async with SessionLocal() as db:
+    async with AsyncSessionLocal() as db:
         result = await db.execute(text("SELECT COUNT(*) FROM \"JobsApp_job\""))
         count = result.scalar()
         print(f"Number of jobs in database: {count}")

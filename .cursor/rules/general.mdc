@@ -9,8 +9,146 @@ This is a **FastAPI-powered AI job-matching bot** that integrates with **Telegra
 - The bot allows users to chat, upload CVs, receive job matches, and set job preferences.  
 - The system must be **asynchronous** for handling Telegram requests efficiently.  
 - The backend is deployed on **Fly.io**, while the database is on **Render**.  
+- **Embedding-based matching** is our recommended approach for matching user queries to jobs (or CVs to jobs), relying on OpenAI to compute text embeddings.
 
 📌 **Refer to** `Product_Requirements_Document.md` for architecture, features, and business logic.
+---
+# Cursors Project Best Practices and Cursor Rules
+
+Below is a set of **cursor rules** (i.e. guidelines) to help ensure that your Cursors project is maintainable, secure, and follows best practices across all components. Each rule includes links to the relevant official documentation for further details.
+
+---
+
+## 1. Core Framework & API
+
+### FastAPI
+- **Async & Dependency Injection:** Leverage FastAPI’s asynchronous capabilities and dependency injection for cleaner, testable endpoints.
+- **Validation & Documentation:** Use Pydantic models for request/response validation and let FastAPI auto-generate OpenAPI docs.
+- **Error Handling:** Implement global exception handlers to provide clear API error messages.
+- **Learn More:** [FastAPI Documentation](mdc:https:/fastapi.tiangolo.com)
+
+### Uvicorn
+- **Performance & Configuration:** Run Uvicorn in production mode with multiple workers, and consider using Gunicorn as a process manager if needed.
+- **Monitoring:** Configure logging and monitoring to catch performance bottlenecks.
+- **Learn More:** [Uvicorn Documentation](mdc:https:/www.uvicorn.org)
+
+---
+
+## 2. Database & ORM
+
+### PostgreSQL
+- **Security & Performance:** Use SSL for database connections, index frequently queried columns, and follow security best practices.
+- **Maintenance:** Regularly back up your data and monitor performance.
+- **Learn More:** [PostgreSQL Documentation](mdc:https:/www.postgresql.org/docs)
+
+### SQLAlchemy (v2.0)
+- **Async Patterns:** Use the new async API where applicable for better performance.
+- **Session Management:** Manage sessions carefully (e.g., using context managers) to avoid connection leaks.
+- **Query Efficiency:** Write efficient queries and use lazy loading or eager loading as appropriate.
+- **Learn More:** [SQLAlchemy Documentation](mdc:https:/docs.sqlalchemy.org/en/20)
+
+### Alembic (Database Migrations)
+- **Version Control:** Keep all schema changes versioned and test migrations in a staging environment.
+- **Reversibility:** Write reversible migration scripts when possible.
+- **Learn More:** [Alembic Documentation](mdc:https:/alembic.sqlalchemy.org/en/latest)
+
+### pgvector
+- **Indexing & Performance:** Build proper indexes for vector similarity searches and benchmark query performance.
+- **Compatibility:** Ensure your PostgreSQL version supports the extension.
+- **Learn More:** [pgvector Documentation](mdc:https:/github.com/pgvector/pgvector)
+
+---
+
+## 3. AI & Machine Learning
+
+### OpenAI API
+- **Security:** Keep your API keys secure by storing them in environment variables.
+- **Error & Rate Handling:** Implement proper error handling and consider rate-limiting to manage API usage.
+- **Data Handling:** Validate and sanitize input/output data when sending requests.
+- **Learn More:** [OpenAI API Documentation](mdc:https:/platform.openai.com/docs)
+
+---
+
+## 4. Telegram Integration
+
+### python-telegram-bot
+- **Async & Robustness:** Use the asynchronous features (available in v20.0+) to handle messages efficiently.
+- **Error Handling:** Include comprehensive error handling and logging for bot commands.
+- **Compliance:** Follow Telegram’s API guidelines and rate limits.
+- **Learn More:** [python-telegram-bot Documentation](mdc:https:/docs.python-telegram-bot.org)
+
+---
+
+## 5. Document Processing
+
+### pdfplumber
+- **Error Handling:** Check for and gracefully handle errors during PDF parsing (e.g., encrypted or corrupt files).
+- **Resource Management:** Close files properly to free up resources.
+- **Learn More:** [pdfplumber Documentation](mdc:https:/github.com/jsvine/pdfplumber)
+
+### python-docx
+- **Robust Parsing:** Validate document structure and handle unexpected content.
+- **File Handling:** Ensure files are properly opened/closed and manage exceptions.
+- **Learn More:** [python-docx Documentation](mdc:https:/python-docx.readthedocs.io/en/latest)
+
+---
+
+## 6. Testing Tools
+
+### pytest
+- **Coverage & Organization:** Write tests that cover all critical paths, and organize tests to mirror your project structure.
+- **Continuous Integration:** Integrate pytest into your CI/CD pipeline.
+- **Learn More:** [pytest Documentation](mdc:https:/docs.pytest.org/en/latest)
+
+### pytest-asyncio
+- **Async Testing:** Use pytest-asyncio to test asynchronous code reliably.
+- **Isolation:** Ensure your async tests run in isolation to prevent side effects.
+- **Learn More:** [pytest-asyncio Documentation](mdc:https:/github.com/pytest-dev/pytest-asyncio)
+
+---
+
+## 7. Development & Monitoring
+
+### Streamlit
+- **Security & Efficiency:** Secure your admin dashboard (e.g., with authentication) and use caching to improve performance.
+- **User Experience:** Design intuitive interfaces for monitoring and administration.
+- **Learn More:** [Streamlit Documentation](mdc:https:/docs.streamlit.io)
+
+---
+
+## 8. Deployment Platforms
+
+### Fly.io (Backend Deployment)
+- **Scaling & Resilience:** Configure your deployment for scalability and proper load balancing. Monitor resource usage and set up health checks.
+- **Logging & Security:** Integrate comprehensive logging and secure your deployments.
+- **Learn More:** [Fly.io Documentation](mdc:https:/fly.io/docs)
+
+### Render (Database Hosting)
+- **Secure Connections:** Use secure connection strings and regularly update your credentials.
+- **Maintenance:** Monitor database performance and backups.
+- **Learn More:** [Render Documentation](mdc:https:/render.com/docs)
+
+---
+
+## 9. Environment & Configuration
+
+### python-dotenv
+- **Security:** Load environment variables securely, and never commit your `.env` files to version control.
+- **Consistency:** Maintain separate configurations for development, testing, and production.
+- **Learn More:** [python-dotenv Documentation](mdc:https:/github.com/theskumar/python-dotenv)
+
+---
+
+## 10. Logging
+
+### python-json-logger
+- **Structured Logging:** Use JSON logging to facilitate easier parsing, filtering, and integration with centralized logging systems.
+- **Error Details:** Include sufficient context in logs (e.g., request IDs, error details) for effective troubleshooting.
+- **Learn More:** [python-json-logger Documentation](mdc:https:/github.com/madzak/python-json-logger)
+
+---
+
+By following these cursor rules and referring to the linked documentation, you'll be well-equipped to develop, test, and deploy your project using industry-standard best practices across all components.
 
 ---
 
@@ -25,15 +163,16 @@ This is a **FastAPI-powered AI job-matching bot** that integrates with **Telegra
 - Use **`Depends()`** for injecting database sessions.
 - Implement **rate-limiting** and **input validation** to prevent spam or abuse.
 
-📌 **Refer to** [FastAPI Docs](https://fastapi.tiangolo.com/) for best practices.
+📌 **Refer to** [FastAPI docs](mdc:https:/fastapi.tiangolo.com) for best practices.
 
 ---
 
 ## 3️⃣ Database & Models (PostgreSQL)
 - The bot interacts with **the existing job database from accountingfirmjobs.com**.
-- A `users` table will be created to track Telegram users and their preferences.
+- A `users` table is used to track Telegram users and their preferences.
 - Use **SQLAlchemy 2.0** with **asyncpg** for database interactions.
-- Ensure **indexed queries** for fast job lookups.
+- Ensure **indexed queries** for basic lookups, and **pgvector** or similar solution for embedding-based searches.
+- If embedding-based matching is fully integrated, store embeddings in the database (e.g., via a JSON or vector column).
 
 📌 **Refer to** `Product_Requirements_Document.md` for the exact schema design.
 
@@ -62,49 +201,31 @@ This is a **FastAPI-powered AI job-matching bot** that integrates with **Telegra
 - Use **async database queries** to prevent blocking operations.
 - Optimize for **scalability**:
   - Use **connection pooling** for PostgreSQL.
-  - Cache **frequently accessed** job queries using **Redis (future scope)**.
-- Ensure the **Telegram bot can handle concurrent users efficiently**.
+  - Consider **pgvector** or a specialized vector DB if the job set is large.
+  - Optionally cache **frequently accessed** job embeddings or results using **Redis** (future scope).
+- Ensure the **Telegram bot** can handle concurrent user requests efficiently.
 
 ---
 
-## 7️⃣ AI Matching & Data Enrichment
-- The bot should collect **user preferences dynamically** over time.
-- Use **OpenAI embeddings** for CV parsing and job matching (future scope).
-- Store **user career history and job preferences** for improving job recommendations.
-
-📌 **Refer to** `Product_Requirements_Document.md` for AI-matching details.
-
----
-
-## 8️⃣ Logging & Monitoring Standards
-- Use structured logging with proper levels (DEBUG, INFO, ERROR)
-- Implement database logging for critical operations
-- Store logs in SQLite for the admin dashboard
-- Include proper error context in all log messages
-
-## 9️⃣ Database Connection Management
-- Use connection pooling for PostgreSQL connections
-- Implement proper connection cleanup
-- Handle connection timeouts and keepalives
-- Follow the retry pattern for failed connections
-
-## 🔟 Admin Dashboard Guidelines
-- Build with Streamlit for real-time monitoring
-- Include user activity metrics
-- Implement log viewing and filtering
-- Enable data export functionality
+## 7️⃣ AI Matching & CV Parsing
+- **Preferred**: an embedding-based approach for matching user queries (and CVs) to job descriptions.
+  - **OpenAI text embeddings** for both job text and user query → similarity comparison.
+  - Strict filters (location, salary) may still be handled with SQL.
+- **CV parsing** uses:
+  - `pdfplumber` for PDFs.
+  - `python-docx` for Word Documents.
 
 ---
 
 ## 🔹 Summary of Core Principles
 ✅ Follow **FastAPI best practices** for API development.  
 ✅ Maintain **async** workflows to handle bot interactions efficiently.  
-✅ Use **PostgreSQL** as the central job-matching database.  
+✅ Use **PostgreSQL** as the central job-matching database, with **pgvector** or similar for embeddings if feasible.  
 ✅ Ensure **Telegram bot reliability** by handling errors gracefully.  
 ✅ Use **environment variables** for security & deployment.  
-✅ Reference **Product_Requirements_Document.md** for all major decisions.  
+✅ Reference **Product_Requirements_Document.md** for all major decisions regarding AI matching logic.
 
 ---
 
 ### ✅ **Final Notes**
-This rules file should guide **Cursor's AI** when providing suggestions for **FastAPI, database design, and Telegram bot development**.  
+These rules should guide **Cursor's AI** when providing suggestions for **FastAPI**, **database design**, **Telegram bot development**, and especially **embedding-based matching** as the main approach for semantic job search.  

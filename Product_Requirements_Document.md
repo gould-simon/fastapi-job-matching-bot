@@ -3,218 +3,240 @@
 
 ---
 
-## 1️⃣ Introduction
-### 🔹 Problem Statement
-Accounting professionals often struggle to find the right job opportunities. **Traditional job boards are inefficient**, requiring manual searches, irrelevant job alerts, and generic application processes. **Firms also struggle to reach the right talent**, leading to wasted time and resources.
+## 1. Introduction
 
-### 🔹 Product Vision
-The AI-powered job-matching bot **automates and personalizes the job search experience** for accountants. By integrating **AI-powered resume analysis, job matching, and career guidance**, it will provide **instant job recommendations**, **custom job alerts**, and **salary insights**. Over time, it will build a **high-value talent database**, enabling **better hiring decisions and monetization opportunities**.
+Accounting professionals often struggle to find relevant jobs on generic job boards. There’s a gap for a specialized system that uses **AI** to understand a candidate’s resume (or input) and then **surface matching roles** in the accounting industry—particularly from specialized databases like [accountingfirmjobs.com](https://accountingfirmjobs.com/).
 
----
-
-## 2️⃣ Objectives & Goals
-✅ **For Job Seekers**:  
-- Automate **job discovery** using AI-powered CV matching.  
-- Provide **personalized job alerts & recommendations**.  
-- Offer **career insights** (salary benchmarking, career guidance).  
-
-✅ **For Employers & Recruiters**:  
-- Connect **top-matched candidates** with relevant job openings.  
-- Allow **targeted outreach** to passive & active job seekers.  
-- Create a **data-driven hiring experience**.  
-
-✅ **For Platform Growth & Monetization**:  
-- Build a **detailed accounting talent database**.  
-- Enable **sponsored job alerts** & **premium career services**.  
-- Offer **recruiter access** to AI-matched talent.  
+This bot is built using **FastAPI** (Python) on the backend, a **PostgreSQL** database (on Render), and a **Telegram** interface for chat-based interactions. Its main purpose is to:
+1. Automate job discovery.
+2. Provide relevant, accounting-focused job matches.
+3. Improve the user experience for both job seekers and recruiters at accounting firms.
 
 ---
 
-## 3️⃣ Target Users & Roles
-| **User Type** | **Role & Actions** |
-|--------------|----------------- |
-| 👩‍💼 **Job Seekers** | Upload CV, search jobs, subscribe to alerts, receive AI career insights |
-| 🏢 **Accounting Firms & Recruiters** | Post jobs, access premium talent profiles, sponsor job alerts |
-| 👨‍💻 **Admin (Dudley)** | Monitor engagement, track user growth, adjust AI matching logic |
+## 2. Objectives & Goals
+
+### For Job Seekers
+- **AI job search**: Provide quick, chat-based job searches via Telegram (`/search_jobs`).
+- **CV parsing & recommendations**: Extract key skills from uploaded CVs (`/upload_cv`) and suggest suitable roles.
+- **Personalized experience**: Remember user preferences and serve relevant suggestions.
+
+### For Employers & Recruiters
+- **Targeted candidate matching**: Ensure posted jobs reach active candidates who match the required skill set.
+- **High-quality applicant flow**: Reduce noise from irrelevant applicants.
+
+### For Platform Growth & Monetization
+- Build a **talent database** of accounting professionals (using user-submitted data).
+- Provide potential for **premium job postings** or **AI-driven resume alerts** in the future.
 
 ---
 
-## 4️⃣ Core Features for MVP (Minimum Viable Product)
-### 🔹 Telegram Bot
-✅ **Chat-based job search** (`/search_jobs`) – Users find jobs by role, location, salary.  
-✅ **AI-powered job matching** (`/upload_cv`) – Users upload CVs → AI recommends best-fit jobs.  
-✅ **Personalized job alerts** (`/set_alerts`) – Users get notified when relevant jobs appear.  
+## 3. Target Users & Roles
 
-### 🔹 AI Job Matching Engine
-✅ **Extract CV data** – AI reads resumes to understand experience & skills.  
-✅ **Match CVs to jobs** – Uses AI embeddings to recommend the best roles.  
-
-### 🔹 User Profile & Database
-✅ **Auto-register users** when they interact with the bot.  
-✅ **Store job preferences, skills, certifications** in PostgreSQL.  
-✅ **Track engagement metrics** (messages sent, job searches, applications).  
-
-### 🔹 Admin Dashboard (Fly.io)
-✅ **Track user growth, engagement, job alert subscriptions.**  
-✅ **View job search trends & AI job match performance.**  
-
-### 🔹 Deployment & Integration
-✅ **FastAPI backend (Fly.io) connected to PostgreSQL (Render).**  
-✅ **Secure environment variable handling for API keys & DB credentials.**  
-✅ **Seamless integration with accountingfirmjobs.com database.**  
+| **User Type**                    | **Actions & Responsibilities**                                    |
+|----------------------------------|--------------------------------------------------------------------|
+| **Job Seekers (Telegram users)** | - Search jobs, set alerts, upload CVs. <br> - Provide job preferences (role, location, seniority).  |
+| **Accounting Firms & Recruiters**| - Post jobs in accountingfirmjobs.com (already integrated). <br> - Potential future: sponsor postings, access matched leads. |
+| **Admin (Internal)**             | - Monitor usage stats and logs via Streamlit admin dashboard. <br> - Verify DB health and fix search logic issues. |
 
 ---
 
-## 5️⃣ Future Scope (Beyond MVP)
-### 🔹 Phase 2: Advanced AI & User Experience
-☑️ **Salary Insights** – AI predicts expected salary based on CV data.  
-☑️ **Resume Feedback** – AI suggests improvements for a stronger CV.  
-☑️ **Career Growth Tracking** – Alerts users when they should consider job changes.  
-☑️ **Interview Prep Module** – AI generates mock interview questions.  
+## 4. Core Features (Current MVP)
 
-### 🔹 Phase 3: WhatsApp Bot Integration
-☑️ **Launch WhatsApp bot (Meta Cloud API or Twilio).**  
-☑️ **Sync user profiles between Telegram & WhatsApp.**  
-☑️ **Enable opt-in job alerts via WhatsApp.**  
+1. **Telegram Bot**  
+   - **Search-based conversation** (`/search_jobs`): The user is prompted to specify role, location, and experience level.  
+   - **CV Upload** (`/upload_cv`): The system extracts text from PDF or Word documents using `pdfplumber` or `python-docx`, then uses OpenAI’s API to generate a summary and potential matching roles.  
+   - **Free-form Chat**: The bot can provide basic Q&A or fallback to an AI-driven response using `get_ai_response`.
 
-### 🔹 Phase 4: Recruiter & Firm Monetization
-☑️ **Sponsored Job Alerts** – Employers pay to reach high-quality candidates.  
-☑️ **Premium Talent Access** – Recruiters pay for access to AI-matched talent.  
-☑️ **Employer Branding** – Firms can promote themselves inside the bot.  
+2. **AI Preference Extraction**  
+   - The bot calls `extract_job_preferences` (in `ai_handler.py`) to parse user queries like “audit technology roles in new york for manager or director level.”  
+   - GPT-based logic transforms queries into JSON with fields like **role**, **location**, **experience**, and **salary**.  
+   - Some **standardization** is attempted (e.g. “NY,” “NYC” → “new york”), though it’s still evolving.
 
----
+3. **Database Integration**  
+   - The bot queries a **PostgreSQL** database referencing tables from [accountingfirmjobs.com](https://accountingfirmjobs.com/).  
+   - **Tables**:  
+     - `users` (tracks Telegram users + their preferences)  
+     - `JobsApp_job` (contains job posts: title, location, service line, seniority, etc.)  
+     - `JobsApp_accountingfirm` (firms that post jobs)  
+     - `user_searches` (logs the user’s search queries & extracted preferences)
 
-## 6️⃣ User Journey
-### 🔹 Job Seeker Flow
-1. **User clicks Telegram link** → Bot registers them in the database.  
-2. **User searches for jobs** (`/search_jobs`) → FastAPI fetches jobs from PostgreSQL.  
-3. **User uploads CV** (`/upload_cv`) → AI extracts skills & experience.  
-4. **Bot recommends best-matching jobs** using AI embeddings.  
-5. **User subscribes to job alerts** (`/set_alerts`).  
-6. **Bot sends job notifications based on preferences.**  
+4. **Basic Job Matching (SQL + LIKE)**  
+   - Currently, the code mostly uses `LOWER(...) LIKE '%pattern%'` queries over `job_title`, `service`, and optionally `description`.  
+   - If no matches are found, the bot attempts a broader fallback (though the fallback logic is not fully refined).
 
-### 🔹 Admin Flow
-1. **Admin logs into the Streamlit dashboard.**  
-2. **Sees total users, active users, and job search trends.**  
-3. **Adjusts AI job-matching logic if needed.**  
-4. **Monitors engagement & subscription rates.**  
+5. **Admin Dashboard**  
+   - Implemented with **Streamlit** (`admin_dashboard.py`).  
+   - Provides:  
+     - **User metrics** (total users, recently active)  
+     - **Job search counts**  
+     - **Log viewer** (from SQLite plus conversation logs)  
+     - **DB connection checks** and error reports
 
 ---
 
-## 7️⃣ Tech Stack
-| **Component** | **Technology** | **Hosting** |
-|--------------|--------------|--------------|
-| **Backend** | FastAPI (Python) | Fly.io |
-| **Database** | PostgreSQL | Render |
-| **AI Processing** | OpenAI API | N/A |
-| **Bot API** | `python-telegram-bot` | Telegram |
-| **Admin Dashboard** | Streamlit | Fly.io |
-| **Future WhatsApp API** | Twilio / Meta Cloud API | WhatsApp |
+## 5. Data Models
+
+### 5.1 `users` Table
+
+    CREATE TABLE users (
+        id SERIAL PRIMARY KEY,
+        telegram_id BIGINT UNIQUE NOT NULL,
+        username TEXT NULL,
+        first_name TEXT NULL,
+        last_name TEXT NULL,
+        job_preferences TEXT NULL,
+        subscribed_to_alerts BOOLEAN DEFAULT FALSE,
+        messages_sent INTEGER DEFAULT 0,
+        last_active TIMESTAMP DEFAULT NOW(),
+        created_at DATE NULL,
+        career_level TEXT NULL,
+        job_type_preferences TEXT NULL,
+        industry_preferences TEXT NULL,
+        certifications TEXT NULL,
+        skills TEXT NULL,
+        salary_expectation TEXT NULL,
+        career_goals TEXT NULL
+    );
+
+- Tracks each Telegram user’s basic info and their preferences.
+- The code primarily uses `telegram_id`, `username`, and `job_preferences`.
+
+### 5.2 `user_searches` Table
+
+    CREATE TABLE user_searches (
+        id SERIAL PRIMARY KEY,
+        telegram_id INTEGER,
+        search_query TEXT NOT NULL,
+        structured_preferences JSON NULL,
+        created_at TIMESTAMP NULL
+    );
+
+- Logs each search the user makes (e.g. “audit manager in new york”).
+- `structured_preferences` often stores the GPT-extracted JSON.
+
+### 5.3 `JobsApp_accountingfirm` and `JobsApp_job`
+
+    JobsApp_accountingfirm(
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        ...
+    );
+
+    JobsApp_job(
+        id SERIAL PRIMARY KEY,
+        firm_id INT REFERENCES "JobsApp_accountingfirm"(id),
+        job_title TEXT,
+        seniority TEXT,
+        service TEXT,
+        industry TEXT,
+        location TEXT,
+        employment TEXT,
+        salary TEXT,
+        description TEXT,
+        link TEXT,
+        date_published TEXT,
+        ...
+    );
+
+- **`JobsApp_job`** is the core source for actual job listings.
+- The code uses `job_title`, `service`, `location`, `seniority`, and `description` when matching queries.
 
 ---
 
-## 8️⃣ Data Models
-### 🔹 `users` Table (Tracks Users & Preferences)
-```sql
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    telegram_id BIGINT UNIQUE NOT NULL,
-    username TEXT NULL,
-    first_name TEXT NULL,
-    last_name TEXT NULL,
-    job_preferences TEXT NULL,
-    subscribed_to_alerts BOOLEAN DEFAULT FALSE,
-    messages_sent INTEGER DEFAULT 0,
-    last_active TIMESTAMP DEFAULT NOW(),
-    career_level TEXT NULL,
-    job_type_preferences TEXT NULL,
-    industry_preferences TEXT NULL,
-    certifications TEXT NULL,
-    skills TEXT NULL,
-    salary_expectation TEXT NULL,
-    career_goals TEXT NULL
-);
-```
+## 6. AI Job Matching Architecture
 
-### 🔹 `jobs` Table (Fetched from accountingfirmjobs.com)
-```sql
-CREATE TABLE jobs (
-    id SERIAL PRIMARY KEY,
-    firm TEXT,
-    job_title TEXT,
-    seniority TEXT,
-    service TEXT,
-    industry TEXT,
-    location TEXT,
-    employment TEXT,
-    salary TEXT,
-    description TEXT,
-    link TEXT,
-    date_published TIMESTAMP,
-    is_indexed BOOLEAN DEFAULT FALSE
-);
-```
+1. **Prompt-based Preference Extraction**  
+   - The user’s free-text search is parsed by GPT (via `extract_job_preferences`), returning a JSON with role, location, experience, etc.
+
+2. **SQL Query**  
+   - The bot runs `LIKE`-based queries. Example logic:
+    
+        SELECT *
+        FROM "JobsApp_job"
+        WHERE LOWER(job_title) LIKE '%{role}%'
+          OR LOWER(service) LIKE '%{role}%'
+          AND LOWER(location) LIKE '%{location}%'
+          AND LOWER(seniority) LIKE '%{experience}%';
+    
+   - A fallback search is triggered if no direct matches are found, but this is still fairly simple (no OR queries for multiple seniorities, etc.).
+
+3. **CV Embedding (Partially Implemented)**  
+   - `job_matching.py` has a function to get an **OpenAI embedding** for the CV.
+   - The code is not fully integrated into the job match queries yet, but the foundation is in place to do vector similarity (likely with `pgvector`).
 
 ---
 
-## 9️⃣ Admin Dashboard Requirements
-### 🔹 Core Metrics Display
-- Total users count
-- Active users in last 7 days
-- Job search metrics
-- User engagement statistics
+## Embedding-Based Matching (Planned Enhancement)
 
-### 🔹 Logging System
-- Real-time log viewing
-- Log level filtering
-- Log export functionality
-- Error tracking and monitoring
+Instead of manually parsing user queries with SQL LIKE filters, we plan to leverage OpenAI embeddings to handle free-text job searches. The core steps:
 
-### 🔹 Database Management
-- Connection pool monitoring
-- Database URL validation
-- Connection status checks
-- Error rate monitoring
+1. **Precompute and store embeddings** for each job (job_title + description + relevant metadata).
+2. **On user queries**, generate an embedding of the user’s search text.
+3. **Perform vector similarity** (e.g., cosine similarity) between the query embedding and job embeddings to find the top matches.
+4. (Optionally) filter out results that do not meet strict constraints like location or salary.
 
-### 🔹 Error Handling & Recovery
-- Automatic connection retry
-- Graceful error handling
-- User-friendly error messages
-- Error notification system
+We will use `text-embedding-ada-002` from OpenAI, which is cost-effective for up to tens of thousands of jobs. This approach reduces the complexity of manual search logic and better captures the semantic meaning of user queries.
 
 
-### AI Job Matching Architecture
+## 7. Admin Dashboard Requirements
 
-The AI-powered job-matching system will use **text embeddings** to compare CVs and job descriptions. The system will:
-1. **Precompute embeddings for all job descriptions** and store them in PostgreSQL.
-2. **Compute CV embeddings on upload** and compare them against stored embeddings using a **vector similarity search**.
-3. **Use PgVector** for scalable similarity matching.
+- **Streamlit** app in `admin_dashboard.py`:
+  - **Metrics**: total users, active users, job searches in last 7 days.
+  - **User activity**: recent interactions (username, last active time, messages sent).
+  - **Logging**: real-time log viewer from SQLite and conversation logs.
+  - **Database checks**: tests connections, shows errors, can export logs as JSON.
 
+---
 
+## 8. Logging & Monitoring
 
-### Rate Limiting & Abuse Protection
+- **Structured Logging** via `python-json-logger` and custom `APILoggingMiddleware`.
+- Logs stored in `logs/` plus a SQLite DB for the dashboard.
+- Telegram interactions appended to `logs/conversations.log`.
 
-To prevent bot abuse and spam, we will implement:
-- **Rate Limits:** Users can make **5 API calls per second** (adjustable).
-- **IP Throttling:** Prevents excessive job searches from the same IP.
-- **CAPTCHA for Signups:** (Future scope) Adds protection against spam accounts.
+---
 
+## 9. Known Gaps & Future Scope
 
+1. **More Advanced Matching**  
+   - The current `LIKE`-based approach struggles with combined inputs like “manager or director.”
+   - Future improvements might use embeddings (or trigram indexes) for more robust text matching.
 
-### Progressive User Profile Enrichment
+2. **Better Fallback Logic**  
+   - Need a progressive approach to relax constraints. Currently, fallback discards some filters completely.
 
-The AI bot will gradually enrich user profiles over time by:
-1. **Inferring preferences from user interactions** (e.g., past job searches).
-2. **Asking contextual follow-up questions** (e.g., "Are you open to remote work?").
-3. **Allowing users to update their profile dynamically** via `/update_profile`.
+3. **Additional Bot Integrations**  
+   - Potential for a WhatsApp interface or other chat platforms.
+   - Expand AI features for resume feedback and salary insights.
 
-### Success Metrics for MVP
+4. **Employer/Recruiter Monetization**  
+   - Paid job listings, targeted candidate outreach, and sponsor-based alerts could be revenue sources in future.
 
-- **User Engagement**
-  - ✅ 500+ active users in the first 3 months.
-  - ✅ 30%+ of users uploading CVs.
-  - ✅ 70%+ of job searches leading to interaction.
+---
 
-- **Job Matching Performance**
-  - ✅ At least **80% of job recommendations** marked as "relevant" by users.
-  - ✅ Users clicking on **20%+ of recommended jobs**.
+## 10. Deployment & Environment
+
+- **FastAPI** app on **Fly.io** using `fly.toml`.
+- **PostgreSQL** database on **Render** using `DATABASE_URL`.
+- **Telegram Bot** via `python-telegram-bot`.
+- **Environment Variables** from `.env`:
+  - `TELEGRAM_BOT_TOKEN`
+  - `OPENAI_API_KEY`
+  - `DATABASE_URL`
+  - Plus optional admin IDs, etc.
+
+---
+
+## 11. Success Metrics (Short-Term)
+
+- **User Engagement**  
+  - At least 100 weekly active job seekers.
+  - A majority able to complete `/search_jobs` or CV upload flows.
+
+- **Match Relevance**  
+  - Subjective measure: job listings must align well with user queries.
+
+- **System Stability**  
+  - Minimal downtime.
+  - Adequate logging/error handling for quick fixes.
