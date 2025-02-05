@@ -182,11 +182,39 @@ CREATE TABLE jobs (
 - User-friendly error messages
 - Error notification system
 
----
 
-## 📌 Next Steps
-1️⃣ **Build & Deploy the Telegram bot with basic job search.**  
-2️⃣ **Implement AI-powered job matching from CV uploads.**  
-3️⃣ **Enhance user database to store detailed career insights.**  
-4️⃣ **Launch the Streamlit admin dashboard for user monitoring.**  
-5️⃣ **Expand to WhatsApp & explore monetization.**  
+### AI Job Matching Architecture
+
+The AI-powered job-matching system will use **text embeddings** to compare CVs and job descriptions. The system will:
+1. **Precompute embeddings for all job descriptions** and store them in PostgreSQL.
+2. **Compute CV embeddings on upload** and compare them against stored embeddings using a **vector similarity search**.
+3. **Use PgVector** for scalable similarity matching.
+
+
+
+### Rate Limiting & Abuse Protection
+
+To prevent bot abuse and spam, we will implement:
+- **Rate Limits:** Users can make **5 API calls per second** (adjustable).
+- **IP Throttling:** Prevents excessive job searches from the same IP.
+- **CAPTCHA for Signups:** (Future scope) Adds protection against spam accounts.
+
+
+
+### Progressive User Profile Enrichment
+
+The AI bot will gradually enrich user profiles over time by:
+1. **Inferring preferences from user interactions** (e.g., past job searches).
+2. **Asking contextual follow-up questions** (e.g., "Are you open to remote work?").
+3. **Allowing users to update their profile dynamically** via `/update_profile`.
+
+### Success Metrics for MVP
+
+- **User Engagement**
+  - ✅ 500+ active users in the first 3 months.
+  - ✅ 30%+ of users uploading CVs.
+  - ✅ 70%+ of job searches leading to interaction.
+
+- **Job Matching Performance**
+  - ✅ At least **80% of job recommendations** marked as "relevant" by users.
+  - ✅ Users clicking on **20%+ of recommended jobs**.

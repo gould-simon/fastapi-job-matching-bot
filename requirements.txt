@@ -26,6 +26,9 @@ pillow  # For image processing (optional, but useful if handling images in CVs)
 # Web UI (Optional, for testing)
 streamlit
 
+# Logging
+python-json-logger==2.0.7
+
 # Linting & Formatting (Optional, for clean code)
 black  # Auto-formats Python code
 flake8  # Linter for enforcing best practices

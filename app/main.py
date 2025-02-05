@@ -1,9 +1,13 @@
 from fastapi import FastAPI, Request
 from app.routes import router
 from app.telegram_bot import application
+from app.logging_config import APILoggingMiddleware
 import os
 
 app = FastAPI()
+
+# Add logging middleware
+app.middleware("http")(APILoggingMiddleware())
 
 app.include_router(router)
 
