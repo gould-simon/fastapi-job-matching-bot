@@ -4,7 +4,7 @@ from openai import OpenAI
 from sqlalchemy import select, text, bindparam, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from .models import Job, JobEmbedding, AccountingFirm
-from .database import get_db
+from .database import get_db, AsyncSessionLocal
 import logging
 import json
 from .config import OPENAI_API_KEY
@@ -76,32 +76,41 @@ def prepare_job_text(job_or_title: Union[Job, str], description: str = None) -> 
         logger.error(f"Error preparing job text: {json.dumps(error_context, indent=2)}")
         raise
 
-async def update_job_embedding(db: AsyncSession, job: Job) -> None:
+async def update_job_embedding(job: Job) -> None:
     """Update embedding for a single job."""
-    try:
-        logger.info(f"Updating embedding for job ID {job.id}")
-        job_text = prepare_job_text(job)
-        embedding = await generate_job_embedding(job_text)
-        job.embedding = embedding
-        await db.commit()
-        logger.info(f"Successfully updated embedding for job ID {job.id}")
-    except Exception as e:
-        await db.rollback()
-        error_context = {
-            "job_id": getattr(job, 'id', None),
-            "job_title": getattr(job, 'job_title', None),
-            "error_type": type(e).__name__,
-            "error_message": str(e),
-            "traceback": traceback.format_exc()
-        }
-        logger.error(f"Error updating job embedding: {json.dumps(error_context, indent=2)}")
-        raise
+    async with AsyncSessionLocal() as db:
+        try:
+            logger.info(f"Updating embedding for job ID {job.id}")
+            job_text = prepare_job_text(job)
+            embedding_vector = await generate_job_embedding(job_text)
+            
+            # Create new embedding record
+            job_embedding = JobEmbedding(
+                job_id=job.id,
+                embedding=embedding_vector,  # Store as double precision array
+                embedding_vector=embedding_vector,
+                last_updated=datetime.now(UTC)
+            )
+            db.add(job_embedding)
+            await db.commit()
+            logger.info(f"Successfully updated embedding for job ID {job.id}")
+        except Exception as e:
+            await db.rollback()
+            error_context = {
+                "job_id": getattr(job, 'id', None),
+                "job_title": getattr(job, 'job_title', None),
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            }
+            logger.error(f"Error updating job embedding: {json.dumps(error_context, indent=2)}")
+            raise
 
 async def update_all_job_embeddings(db: AsyncSession, batch_size: int = 50) -> None:
     """Update embeddings for all jobs in batches."""
     try:
-        # Get jobs without embeddings
-        query = select(Job).where(Job.embedding.is_(None))
+        # Get jobs without embeddings using a left join
+        query = select(Job).outerjoin(JobEmbedding).where(JobEmbedding.id.is_(None))
         result = await db.execute(query)
         jobs = result.scalars().all()
         
@@ -117,7 +126,7 @@ async def update_all_job_embeddings(db: AsyncSession, batch_size: int = 50) -> N
             logger.info(f"Processing batch {i//batch_size + 1} (jobs {batch_start}-{batch_end} of {total_jobs})")
             
             try:
-                tasks = [update_job_embedding(db, job) for job in batch]
+                tasks = [update_job_embedding(job) for job in batch]
                 await asyncio.gather(*tasks)
                 logger.info(f"Successfully processed batch {i//batch_size + 1}")
             except Exception as batch_error:
@@ -152,8 +161,44 @@ async def semantic_job_search(query_text: str, location: str = None, limit: int 
         raise ValueError("Limit must be positive")
 
     try:
-        query_embedding = await generate_job_embedding(query_text)
+        # Check if OpenAI API key is configured
+        if not OPENAI_API_KEY:
+            logger.error("OpenAI API key is not configured")
+            raise ValueError("OpenAI API key is not configured. Please check your environment variables.")
+
+        # Verify database connection
+        if not db or not db.is_active:
+            logger.error("Database session is not active")
+            raise RuntimeError("Database connection is not active. Please try again later.")
+
+        # Generate query embedding
+        try:
+            logger.info(f"Generating embedding for query: {query_text}")
+            query_embedding = await generate_job_embedding(query_text)
+            logger.info("Successfully generated query embedding")
+        except Exception as e:
+            logger.error(f"Failed to generate embedding: {str(e)}", exc_info=True)
+            if "invalid api key" in str(e).lower():
+                raise RuntimeError("Invalid OpenAI API key. Please check your configuration.")
+            elif "rate limit" in str(e).lower():
+                raise RuntimeError("OpenAI API rate limit exceeded. Please try again in a few moments.")
+            else:
+                raise RuntimeError(f"Failed to generate embedding: {str(e)}")
+
         location_pattern = f"%{location.lower()}%" if location else None
+
+        # Check if job_embeddings table exists and has data
+        try:
+            logger.info("Checking job embeddings table...")
+            count_query = select(func.count()).select_from(JobEmbedding)
+            embedding_count = await db.scalar(count_query)
+            logger.info(f"Found {embedding_count} job embeddings")
+            
+            if embedding_count == 0:
+                raise RuntimeError("No job embeddings found in database. The system needs initialization.")
+        except Exception as e:
+            logger.error(f"Failed to check job embeddings: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to check job embeddings: {str(e)}")
 
         # Build query using sqlalchemy-pgvector
         query = select(
@@ -183,6 +228,7 @@ async def semantic_job_search(query_text: str, location: str = None, limit: int 
         # Add location filter if provided
         if location_pattern:
             query = query.where(func.lower(Job.location).like(location_pattern))
+            logger.info(f"Added location filter: {location}")
 
         logger.info("Starting semantic search with params: %s", json.dumps({
             "query_text": query_text,
@@ -192,9 +238,28 @@ async def semantic_job_search(query_text: str, location: str = None, limit: int 
             "timestamp": datetime.now(UTC).isoformat()
         }, default=str))
 
-        result = await db.execute(query)
-        jobs = result.mappings().all()
-        return [dict(job) for job in jobs]
+        try:
+            result = await db.execute(query)
+            jobs = result.mappings().all()
+            
+            if not jobs:
+                logger.info("No jobs found matching the search criteria")
+                if location_pattern:
+                    # Check if location is the limiting factor
+                    location_count = await db.scalar(
+                        select(func.count())
+                        .select_from(Job)
+                        .where(func.lower(Job.location).like(location_pattern))
+                    )
+                    if location_count == 0:
+                        raise ValueError(f"No jobs found in location: {location}")
+            
+            logger.info(f"Found {len(jobs)} matching jobs")
+            return [dict(job) for job in jobs]
+
+        except Exception as e:
+            logger.error(f"Failed to execute search query: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to execute search query: {str(e)}")
 
     except Exception as e:
         logger.error("Query execution error: %s", str(e.__class__.__name__) + ": " + str(e))

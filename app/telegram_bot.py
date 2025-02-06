@@ -5,7 +5,7 @@ import os
 import logging
 from app.ai_handler import get_ai_response, process_cv, extract_job_preferences, standardize_search_terms
 from app.database import AsyncSessionLocal, test_database_connection, list_all_tables, get_db
-from app.models import User, UserSearch, UserConversation
+from app.models import User, UserSearch, UserConversation, Job, JobEmbedding, AccountingFirm
 import asyncio
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -17,6 +17,7 @@ from telegram.helpers import escape_markdown
 from sqlalchemy.sql import select
 from app.logging_config import get_logger
 from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy import func
 
 # Load environment variables
 load_dotenv()
@@ -71,7 +72,7 @@ async def start(update: Update, context: CallbackContext) -> None:
                 # Check if user exists
                 logger.debug("Checking if user exists in database...")
                 result = await db.execute(
-                    "SELECT * FROM users WHERE telegram_id = :telegram_id",
+                    text("SELECT * FROM users WHERE telegram_id = :telegram_id"),
                     {"telegram_id": update.effective_user.id}
                 )
                 user = result.first()
@@ -91,7 +92,6 @@ async def start(update: Update, context: CallbackContext) -> None:
         except Exception as db_error:
             logger.error(f"Database error in start command: {str(db_error)}", exc_info=True)
             # Don't return error to user since welcome message was already sent
-            
     except Exception as e:
         logger.error(f"Error in start command: {str(e)}", exc_info=True)
         await update.message.reply_text("Sorry, I encountered an error. Please try again.")
@@ -153,15 +153,44 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                 return ConversationHandler.END
             logger.info(f"Extracted preferences: {preferences}")
         except Exception as e:
-            logger.error(f"Error extracting preferences: {str(e)}", exc_info=True)
+            error_msg = f"Error extracting preferences: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             await update.message.reply_text(
-                "Sorry, I had trouble understanding your preferences. Please try again with clearer details."
+                "I had trouble understanding your preferences. The error was:\n"
+                f"_{escape_markdown(str(e))}_\n\n"
+                "Please try again with clearer details about the role, location, and experience level."
             )
             return ConversationHandler.END
 
         # Store the search in database
         async with AsyncSessionLocal() as db:
             try:
+                # Check database state before search
+                logger.info("Checking database state before search...")
+                jobs_count = await db.scalar(select(func.count()).select_from(Job))
+                embeddings_count = await db.scalar(select(func.count()).select_from(JobEmbedding))
+                firms_count = await db.scalar(select(func.count()).select_from(AccountingFirm))
+                logger.info(f"Database state: {jobs_count} jobs, {embeddings_count} embeddings, {firms_count} firms")
+
+                if jobs_count == 0:
+                    await update.message.reply_text(
+                        "I couldn't find any jobs in the database. This could be because:\n"
+                        "• The job database hasn't been initialized yet\n"
+                        "• The job scraper hasn't run recently\n"
+                        "• There was an error during the last database update\n\n"
+                        "Please try again later or contact support."
+                    )
+                    return ConversationHandler.END
+
+                if embeddings_count == 0:
+                    await update.message.reply_text(
+                        "The job search system needs to be initialized. This could be because:\n"
+                        "• The embeddings haven't been generated yet\n"
+                        "• There was an error during embedding generation\n\n"
+                        "Please try again later or contact support."
+                    )
+                    return ConversationHandler.END
+
                 # Use semantic search
                 matching_jobs = await semantic_job_search(
                     db=db,
@@ -174,74 +203,82 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                 logger.info(f"Search completed in {search_time:.2f} seconds")
                 logger.info(f"Found {len(matching_jobs)} matching jobs")
 
-                if matching_jobs:
-                    logger.debug("Job matches found:")
-                    for job in matching_jobs:
-                        logger.debug(f"Match: {job['firm_name']} - {job['job_title']} (Score: {job['similarity_score']:.2f})")
-                    
-                    response = "🎯 Here are some matching jobs:\n\n"
-                    for job in matching_jobs:
-                        response += (
-                            f"🏢 *{escape_markdown(job['firm_name'])}*\n"
-                            f"📋 {escape_markdown(job['job_title'])}\n"
-                            f"💫 Match Score: {job['similarity_score']:.0%}\n"
-                        )
-                        if job['seniority']:
-                            response += f"👔 {escape_markdown(job['seniority'])}\n"
-                        if job['service']:
-                            response += f"🔧 Service: {escape_markdown(job['service'])}\n"
-                        if job['location']:
-                            response += f"📍 {escape_markdown(job['location'])}\n"
-                        if job['employment']:
-                            response += f"⏰ {escape_markdown(job['employment'])}\n"
-                        if job['salary']:
-                            response += f"💰 {escape_markdown(job['salary'])}\n"
-                        if job['link']:
-                            response += f"🔗 {escape_markdown(job['link'])}\n"
-                        response += "\n"
-                    
-                    response += "Use /search\_jobs to search for more jobs!"
-                    
-                    try:
-                        await update.message.reply_text(
-                            response, 
-                            parse_mode='MarkdownV2',
-                            disable_web_page_preview=True
-                        )
-                        logger.info("Successfully sent job matches to user")
-                    except Exception as msg_error:
-                        logger.error(f"Error sending formatted message: {str(msg_error)}")
-                        # Fallback to plain text if formatting fails
-                        await update.message.reply_text(
-                            "Found some matching jobs, but encountered an error with message formatting. "
-                            "Please try your search again.",
-                            parse_mode=None
-                        )
-                else:
-                    logger.info("No matches found, sending alternative message")
+                if not matching_jobs:
                     await update.message.reply_text(
-                        "😔 I couldn't find any matching jobs.\n\n"
-                        "Try:\n"
-                        "• Using more general terms\n"
-                        "• Removing location requirements\n"
-                        "• Searching for related roles\n\n"
-                        "Use /search_jobs to try another search!"
+                        "I couldn't find any jobs matching your criteria. This could be because:\n"
+                        "• There are no jobs in the database matching your location\n"
+                        "• The job title or role you're looking for isn't currently available\n"
+                        "• The search terms might be too specific\n\n"
+                        "Try broadening your search or using different terms."
                     )
+                    return ConversationHandler.END
+
+                logger.debug("Job matches found:")
+                for job in matching_jobs:
+                    logger.debug(f"Match: {job['firm_name']} - {job['job_title']} (Score: {job['similarity_score']:.2f})")
                 
-            except Exception as db_error:
-                logger.error(f"Database error details: {str(db_error)}", exc_info=True)
-                await update.message.reply_text(
-                    "Sorry, I encountered an error while searching for jobs. Please try again."
-                )
-                raise
-            
+                response = "🎯 Here are some matching jobs:\n\n"
+                for job in matching_jobs:
+                    response += (
+                        f"🏢 *{escape_markdown(job['firm_name'])}*\n"
+                        f"📋 {escape_markdown(job['job_title'])}\n"
+                        f"💫 Match Score: {job['similarity_score']:.0%}\n"
+                    )
+                    if job['seniority']:
+                        response += f"👔 {escape_markdown(job['seniority'])}\n"
+                    if job['service']:
+                        response += f"🔧 Service: {escape_markdown(job['service'])}\n"
+                    if job['location']:
+                        response += f"📍 {escape_markdown(job['location'])}\n"
+                    if job['employment']:
+                        response += f"⏰ {escape_markdown(job['employment'])}\n"
+                    if job['salary']:
+                        response += f"💰 {escape_markdown(job['salary'])}\n"
+                    if job['link']:
+                        response += f"🔗 {escape_markdown(job['link'])}\n"
+                    response += "\n"
+
+                await update.message.reply_text(response, parse_mode='MarkdownV2')
+                return ConversationHandler.END
+
+            except Exception as e:
+                error_msg = str(e)
+                error_type = type(e).__name__
+                logger.error(f"Error in semantic search: {error_type} - {error_msg}", exc_info=True)
+                
+                # Provide more specific error messages based on the type of error
+                if "OpenAI" in error_type:
+                    await update.message.reply_text(
+                        "Sorry, I'm having trouble connecting to the AI service. This might be due to:\n"
+                        "• API key configuration issues\n"
+                        "• Service availability\n"
+                        "• Rate limiting\n\n"
+                        "Please try again in a few moments."
+                    )
+                elif "DatabaseError" in error_type or "OperationalError" in error_type:
+                    await update.message.reply_text(
+                        "Sorry, I'm having trouble accessing the job database. This might be due to:\n"
+                        "• Database connection issues\n"
+                        "• Missing or incomplete job data\n"
+                        "• Database maintenance\n\n"
+                        "Please try again in a few moments."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"Sorry, I encountered an error while searching for jobs:\n"
+                        f"_{escape_markdown(error_msg)}_\n\n"
+                        "Please try again with different search terms or contact support if the issue persists."
+                    )
+                return ConversationHandler.END
+
     except Exception as e:
-        logger.error(f"Error in process_job_preferences: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error in job search: {str(e)}", exc_info=True)
         await update.message.reply_text(
-            "Sorry, I encountered an error processing your request. Please try again."
+            "An unexpected error occurred while processing your request:\n"
+            f"_{escape_markdown(str(e))}_\n\n"
+            "Please try again or contact support if the issue persists."
         )
-    
-    return ConversationHandler.END
+        return ConversationHandler.END
 
 async def upload_cv(update: Update, context: CallbackContext) -> None:
     """Handle CV file uploads"""
@@ -398,48 +435,45 @@ async def test_db(update: Update, context: CallbackContext) -> None:
         )
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command"""
+    """Start command handler - creates new user if not exists"""
     try:
-        user_info = {
-            'telegram_id': update.effective_user.id,
-            'username': update.effective_user.username,
-            'first_name': update.effective_user.first_name,
-            'last_name': update.effective_user.last_name
-        }
-        logger.info("Start command received", extra={'user': user_info})
-
-        async with AsyncSessionLocal() as session:
-            # Check if user exists
-            result = await session.execute(
+        async with AsyncSessionLocal() as db:
+            # Check if user exists using SQLAlchemy ORM
+            result = await db.execute(
                 select(User).where(User.telegram_id == update.effective_user.id)
             )
-            user = result.scalar_one_or_none()
-
-            if not user:
+            try:
+                user = result.scalar_one()
+                await update.message.reply_text(
+                    f"Welcome back {user.username or user.first_name or 'there'}! 👋\n"
+                    "I'm here to help you find your dream job in accounting.\n"
+                    "Use /help to see available commands."
+                )
+            except NoResultFound:
+                # Create new user
                 user = User(
                     telegram_id=update.effective_user.id,
                     username=update.effective_user.username,
                     first_name=update.effective_user.first_name,
                     last_name=update.effective_user.last_name
                 )
-                session.add(user)
-                await session.commit()
-                logger.info("New user created", extra={'user': user_info})
-
-            welcome_message = (
-                f"Welcome {update.effective_user.first_name}! 👋\n\n"
-                "I'm your AI-powered job matching assistant. Here's how I can help:\n"
-                "1. Upload your CV (/upload_cv)\n"
-                "2. Search for jobs (/search)\n"
-                "3. Set job preferences (/preferences)\n\n"
-                "Type /help for more information."
-            )
-            await update.message.reply_text(welcome_message)
-            
+                db.add(user)
+                await db.commit()
+                
+                await update.message.reply_text(
+                    f"Hello {user.username or user.first_name or 'there'}! 👋\n"
+                    "I'm your personal job matching assistant.\n"
+                    "I'll help you find the perfect accounting job.\n\n"
+                    "Here's how to get started:\n"
+                    "1. Upload your CV using /upload_cv\n"
+                    "2. Set your preferences with /preferences\n"
+                    "3. Search for jobs with /search_jobs\n\n"
+                    "Use /help to see all available commands."
+                )
     except Exception as e:
-        logger.error(f"Error in start_command: {str(e)}", exc_info=True)
+        logger.error(f"Error in start command: {str(e)}", exc_info=True)
         await update.message.reply_text(
-            "Sorry, I encountered an error while processing your request. Please try again later."
+            "❌ Sorry, there was an error starting the conversation. Please try again."
         )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -543,35 +577,36 @@ async def search_jobs_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         async with AsyncSessionLocal() as db:
-            # Check if user exists
+            # Check if user exists using SQLAlchemy ORM
             result = await db.execute(
                 select(User).where(User.telegram_id == update.effective_user.id)
             )
             try:
                 user = result.scalar_one()
+                
+                # Record the search
+                search = UserSearch(
+                    telegram_id=update.effective_user.id,
+                    search_query=search_query
+                )
+                db.add(search)
+                await db.commit()
+
+                # Get user's CV embedding
+                cv_embedding = user.get_cv_embedding()
+
+                # TODO: Implement job search logic
+                await update.message.reply_text(
+                    "🔍 Searching for jobs matching your query...\n"
+                    "This feature is coming soon!"
+                )
+
             except NoResultFound:
                 logger.error(f"User not found: {update.effective_user.id}")
                 await update.message.reply_text(
                     "❌ You need to start a conversation with /start first."
                 )
                 return
-
-            # Record the search
-            search = UserSearch(
-                telegram_id=update.effective_user.id,
-                search_query=search_query
-            )
-            db.add(search)
-            await db.commit()
-
-            # Get user's CV embedding
-            cv_embedding = user.get_cv_embedding()
-
-            # TODO: Implement job search logic
-            await update.message.reply_text(
-                "🔍 Searching for jobs matching your query...\n"
-                "This feature is coming soon!"
-            )
 
     except Exception as e:
         logger.error(f"Error in search_jobs_command: {str(e)}", exc_info=True)
@@ -594,18 +629,35 @@ async def set_preferences_command(update: Update, context: ContextTypes.DEFAULT_
 
         # Parse preferences into dictionary
         preferences = {}
-        for pair in preferences_text.split():
-            if "=" in pair:
-                key, value = pair.split("=", 1)
-                preferences[key.strip()] = value.strip()
+        try:
+            for pair in preferences_text.split():
+                if "=" in pair:
+                    key, value = pair.split("=", 1)
+                    preferences[key.strip()] = value.strip()
+        except Exception:
+            raise ValueError("Invalid preferences format")
+
+        if not preferences:
+            raise ValueError("No valid preferences provided")
 
         async with AsyncSessionLocal() as db:
-            # Check if user exists
+            # Check if user exists using SQLAlchemy ORM
             result = await db.execute(
                 select(User).where(User.telegram_id == update.effective_user.id)
             )
             try:
                 user = result.scalar_one()
+                
+                # Update preferences
+                user.set_preferences(preferences)
+                await db.commit()
+
+                await update.message.reply_text(
+                    "✅ Preferences updated successfully!\n"
+                    "Your current preferences:\n"
+                    f"{json.dumps(preferences, indent=2)}"
+                )
+                
             except NoResultFound:
                 logger.error(f"User not found: {update.effective_user.id}")
                 await update.message.reply_text(
@@ -613,19 +665,11 @@ async def set_preferences_command(update: Update, context: ContextTypes.DEFAULT_
                 )
                 return
 
-            # Update preferences
-            user.set_preferences(preferences)
-            await db.commit()
-
-            await update.message.reply_text(
-                "✅ Preferences updated successfully!\n"
-                "Your current preferences:\n"
-                f"{json.dumps(preferences, indent=2)}"
-            )
     except ValueError as e:
         logger.error(f"Invalid preferences format: {str(e)}")
         await update.message.reply_text(
-            "❌ Sorry, there was an error setting your preferences. Please try again later."
+            "❌ Please provide preferences in the correct format:\n"
+            "/preferences location=New York role=Auditor"
         )
     except Exception as e:
         logger.error(f"Error setting preferences: {str(e)}")

@@ -45,34 +45,61 @@ def get_db_config():
     
     return config
 
+# Database environment configuration
+def get_environment_info():
+    """Get information about the current environment."""
+    env = os.getenv("ENVIRONMENT", "development")
+    is_test = "pytest" in os.environ.get("PYTEST_CURRENT_TEST", "")
+    is_production = env == "production"
+    return {
+        "environment": env,
+        "is_test": is_test,
+        "is_production": is_production,
+        "database_type": "sqlite" if is_test else "postgresql"
+    }
+
 # Get database URL and configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+def get_database_url():
+    """Get the database URL with proper environment handling."""
+    env_info = get_environment_info()
+    db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+    
+    # Log database configuration
+    db_logger.info("Database configuration", extra={
+        'environment': env_info['environment'],
+        'is_test': env_info['is_test'],
+        'is_production': env_info['is_production'],
+        'database_type': env_info['database_type'],
+        'url_prefix': db_url.split("://")[0] if "://" in db_url else "unknown"
+    })
+    
+    if env_info['is_test']:
+        db_url = "sqlite+aiosqlite:///./test.db"
+        db_logger.info("Using SQLite for testing")
+    elif db_url.startswith("postgresql://"):
+        parsed = urlparse(db_url)
+        
+        # Add default port if not specified
+        if parsed.port is None:
+            host_with_port = f"{parsed.hostname}:5432"
+            db_url = db_url.replace(parsed.hostname, host_with_port)
+        
+        # Handle Render.com PostgreSQL
+        if "dpg-" in db_url:
+            parsed = urlparse(db_url)
+            port = f":{parsed.port}" if parsed.port else ""
+            render_hostname = f"{parsed.hostname}.oregon-postgres.render.com{port}"
+            db_url = db_url.replace(f"{parsed.hostname}{port}", render_hostname)
+        
+        # Convert to async driver
+        if not db_url.startswith("postgresql+asyncpg://"):
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    
+    return db_url
+
+# Get database configuration
+DATABASE_URL = get_database_url()
 db_config = get_db_config()
-
-# Configure for different environments
-if "pytest" in os.environ.get("PYTEST_CURRENT_TEST", ""):
-    DATABASE_URL = "sqlite+aiosqlite:///./test.db"
-    logger.info("Using SQLite for testing")
-    db_config = {"future": True, "echo": True}
-
-# For production PostgreSQL
-if DATABASE_URL.startswith("postgresql://"):
-    parsed = urlparse(DATABASE_URL)
-    
-    # Add default port if not specified
-    if parsed.port is None:
-        host_with_port = f"{parsed.hostname}:5432"
-        DATABASE_URL = DATABASE_URL.replace(parsed.hostname, host_with_port)
-    
-    # Handle Render.com PostgreSQL
-    if "dpg-" in DATABASE_URL:
-        parsed = urlparse(DATABASE_URL)
-        port = f":{parsed.port}" if parsed.port else ""
-        render_hostname = f"{parsed.hostname}.oregon-postgres.render.com{port}"
-        DATABASE_URL = DATABASE_URL.replace(f"{parsed.hostname}{port}", render_hostname)
-    
-    # Convert to async driver
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 # Create engine with retry logic
 engine = create_async_engine(DATABASE_URL, **db_config)
@@ -203,15 +230,22 @@ async def list_all_tables():
 
 async def test_database_connection():
     """Test the database connection and verify schema"""
+    env_info = get_environment_info()
     try:
         async with AsyncSessionLocal() as session:
             # Test basic connection
             await session.execute(text("SELECT 1"))
-            db_logger.info("✅ Basic database connection successful")
+            db_logger.info("✅ Basic database connection successful", extra={
+                'environment': env_info['environment'],
+                'database_type': env_info['database_type']
+            })
             
             # List all tables first
             all_tables = await list_all_tables()
-            db_logger.info(f"All tables in database: {all_tables}")
+            db_logger.info("Tables in database", extra={
+                'tables': all_tables,
+                'environment': env_info['environment']
+            })
             
             # Check if required tables exist (case-insensitive)
             required_tables = {
@@ -226,21 +260,25 @@ async def test_database_connection():
                 error_msg = f"Missing required tables: {', '.join(missing_tables)}"
                 db_logger.error(error_msg, extra={
                     'existing_tables': list(existing_tables),
-                    'missing_tables': list(missing_tables)
+                    'missing_tables': list(missing_tables),
+                    'environment': env_info['environment']
                 })
                 return False, error_msg
             
             db_logger.info("✅ All required tables exist", extra={
-                'tables': list(existing_tables)
+                'tables': list(existing_tables),
+                'environment': env_info['environment']
             })
             return True, "Database connection and schema verification successful"
             
     except Exception as e:
         log_error(db_logger, e, context={
             'action': 'connection_test',
+            'environment': env_info['environment'],
+            'database_type': env_info['database_type'],
             'database_url': DATABASE_URL.replace(
-                parsed.password, '****'
-            ) if parsed.password else DATABASE_URL
+                urlparse(DATABASE_URL).password, '****'
+            ) if urlparse(DATABASE_URL).password else DATABASE_URL
         })
         return False, f"Connection error: {str(e)}"
 

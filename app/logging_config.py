@@ -25,9 +25,14 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
         else:
             log_record['level'] = record.levelname
             
+        # Add environment information
+        log_record['environment'] = os.getenv('ENVIRONMENT', 'development')
+        log_record['is_test'] = 'pytest' in os.environ.get('PYTEST_CURRENT_TEST', '')
+            
         # Add file and line number
         log_record['file'] = record.filename
         log_record['line'] = record.lineno
+        log_record['function'] = record.funcName
         
         # Add exception info if present
         if record.exc_info:
@@ -46,50 +51,44 @@ class ErrorContextFilter(logging.Filter):
         return True
 
 def get_logger(name: str) -> logging.Logger:
-    """Get a logger with the specified name and enhanced configuration."""
+    """Get a logger with the specified name and proper configuration."""
     logger = logging.getLogger(name)
     
-    if not logger.handlers:  # Only add handlers if they don't exist
+    # Only configure if handlers haven't been added yet
+    if not logger.handlers:
         logger.setLevel(logging.DEBUG)
         
-        # Create console handler with basic formatting
+        # Create console handler with a higher log level
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        console_handler.setFormatter(console_formatter)
+        console_handler.setFormatter(CustomJsonFormatter())
         
-        # Create JSON file handler for detailed logging
-        json_handler = RotatingFileHandler(
-            'logs/app.json',
+        # Create file handler which logs even debug messages
+        file_handler = RotatingFileHandler(
+            filename=f'logs/{name}.json',
             maxBytes=10*1024*1024,  # 10MB
             backupCount=5,
             encoding='utf-8'
         )
-        json_handler.setLevel(logging.DEBUG)
-        json_formatter = CustomJsonFormatter(
-            '%(timestamp)s %(level)s %(name)s %(message)s'
-        )
-        json_handler.setFormatter(json_formatter)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(CustomJsonFormatter())
         
-        # Create separate error log handler
-        error_handler = RotatingFileHandler(
-            'logs/error.log',
-            maxBytes=10*1024*1024,
-            backupCount=5,
-            encoding='utf-8'
-        )
-        error_handler.setLevel(logging.ERROR)
-        error_handler.setFormatter(json_formatter)
-        
-        # Add handlers
+        # Add the handlers to the logger
         logger.addHandler(console_handler)
-        logger.addHandler(json_handler)
-        logger.addHandler(error_handler)
+        logger.addHandler(file_handler)
         
-        # Add context filter
-        logger.addFilter(ErrorContextFilter())
+        # Don't propagate to root logger
+        logger.propagate = False
+        
+        # Log initial configuration
+        logger.info(
+            "Logger configured",
+            extra={
+                'logger_name': name,
+                'handlers': ['console', 'file'],
+                'environment': os.getenv('ENVIRONMENT', 'development')
+            }
+        )
     
     return logger
 
@@ -102,17 +101,20 @@ def log_error(logger: logging.Logger, error: Exception, context: Optional[Dict[s
         error: The exception to log
         context: Additional context to include in the log
     """
-    error_info = {
-        'error_type': error.__class__.__name__,
+    error_context = {
+        'error_type': type(error).__name__,
         'error_message': str(error),
-        'traceback': traceback.format_exc(),
-        'context': context or {}
+        'traceback': traceback.format_exc()
     }
     
+    if context:
+        error_context.update(context)
+    
     logger.error(
-        f"Error occurred: {error}",
+        f"{type(error).__name__}: {str(error)}",
         extra={
-            'error_context': error_info
+            'error_context': error_context,
+            'environment': os.getenv('ENVIRONMENT', 'development')
         },
         exc_info=True
     )

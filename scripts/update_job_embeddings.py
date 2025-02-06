@@ -9,7 +9,7 @@ import traceback
 # Add the parent directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from app.database import SessionLocal
+from app.database import AsyncSessionLocal
 from app.embeddings import update_all_job_embeddings
 import logging
 from logging.handlers import RotatingFileHandler
@@ -67,7 +67,7 @@ async def main():
         }
         logger.info(f"Environment information: {json.dumps(env_info, indent=2)}")
         
-        async with SessionLocal() as db:
+        async with AsyncSessionLocal() as db:
             try:
                 await update_all_job_embeddings(db)
                 
