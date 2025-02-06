@@ -214,7 +214,10 @@ async def semantic_job_search(query_text: str, location: str = None, limit: int 
             Job.link,
             Job.created_at,
             AccountingFirm.name.label('firm_name'),
-            func.l2_distance(JobEmbedding.embedding_vector, query_embedding).label('similarity')
+            func.l2_distance(
+                JobEmbedding.embedding_vector, 
+                func.cast(query_embedding, Vector(1536))
+            ).label('similarity')
         ).select_from(JobEmbedding).join(
             Job, JobEmbedding.job_id == Job.id
         ).join(
@@ -255,10 +258,34 @@ async def semantic_job_search(query_text: str, location: str = None, limit: int 
                         raise ValueError(f"No jobs found in location: {location}")
             
             logger.info(f"Found {len(jobs)} matching jobs")
-            return [dict(job) for job in jobs]
+            
+            # Convert jobs to list of dicts and ensure similarity score is properly handled
+            job_list = []
+            for job in jobs:
+                job_dict = dict(job)
+                # Convert similarity score to float if it exists
+                if 'similarity' in job_dict:
+                    try:
+                        job_dict['similarity_score'] = float(job_dict.pop('similarity'))
+                    except (TypeError, ValueError) as e:
+                        logger.warning(f"Failed to convert similarity score: {e}")
+                        job_dict['similarity_score'] = 0.0
+                else:
+                    job_dict['similarity_score'] = 0.0
+                job_list.append(job_dict)
+            
+            return job_list
 
         except Exception as e:
             logger.error(f"Failed to execute search query: {str(e)}", exc_info=True)
+            error_context = {
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "query": str(query),
+                "location": location,
+                "limit": limit
+            }
+            logger.error(f"Search query execution failed: {json.dumps(error_context, default=str)}")
             raise RuntimeError(f"Failed to execute search query: {str(e)}")
 
     except Exception as e:

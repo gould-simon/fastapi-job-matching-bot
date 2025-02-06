@@ -1,5 +1,6 @@
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, ConversationHandler, ContextTypes
+from telegram.constants import ParseMode
 from dotenv import load_dotenv
 import os
 import logging
@@ -215,30 +216,116 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
 
                 logger.debug("Job matches found:")
                 for job in matching_jobs:
-                    logger.debug(f"Match: {job['firm_name']} - {job['job_title']} (Score: {job['similarity_score']:.2f})")
-                
-                response = "🎯 Here are some matching jobs:\n\n"
-                for job in matching_jobs:
-                    response += (
-                        f"🏢 *{escape_markdown(job['firm_name'])}*\n"
-                        f"📋 {escape_markdown(job['job_title'])}\n"
-                        f"💫 Match Score: {job['similarity_score']:.0%}\n"
-                    )
-                    if job['seniority']:
-                        response += f"👔 {escape_markdown(job['seniority'])}\n"
-                    if job['service']:
-                        response += f"🔧 Service: {escape_markdown(job['service'])}\n"
-                    if job['location']:
-                        response += f"📍 {escape_markdown(job['location'])}\n"
-                    if job['employment']:
-                        response += f"⏰ {escape_markdown(job['employment'])}\n"
-                    if job['salary']:
-                        response += f"💰 {escape_markdown(job['salary'])}\n"
-                    if job['link']:
-                        response += f"🔗 {escape_markdown(job['link'])}\n"
-                    response += "\n"
+                    # Ensure all required fields exist and have valid values
+                    job_title = job.get('job_title', 'No title')
+                    firm_name = job.get('firm_name', 'Unknown firm')
+                    location = job.get('location', 'Location not specified')
+                    similarity_score = job.get('similarity_score', 0.0)
+                    
+                    logger.debug(f"Match: {firm_name} - {job_title} (Score: {similarity_score:.2f})")
 
-                await update.message.reply_text(response, parse_mode='MarkdownV2')
+                response = "🎯 Here are some matching jobs:\n\n"
+                for i, job in enumerate(matching_jobs, 1):
+                    try:
+                        # Safely escape and format each field
+                        def safe_escape(text):
+                            if not text:
+                                return ""
+                            # Convert string representation of list to actual list
+                            text_str = str(text)
+                            if text_str.startswith('[') and text_str.endswith(']'):
+                                try:
+                                    # Remove the brackets and split by comma
+                                    items = text_str[1:-1].split(',')
+                                    # Clean up each item
+                                    items = [item.strip().strip("'").strip('"') for item in items if item.strip()]
+                                    if len(items) == 1:
+                                        text_str = items[0]  # Single location
+                                    else:
+                                        text_str = ", ".join(items)  # Multiple locations
+                                except Exception as e:
+                                    logger.warning(f"Error parsing location list: {e}")
+                            
+                            # Escape special characters for MarkdownV2
+                            chars_to_escape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+                            for char in chars_to_escape:
+                                text_str = text_str.replace(char, f'\\{char}')
+                            return text_str
+
+                        def format_salary(salary):
+                            if not salary:
+                                return "Not specified"
+                            # Handle various salary formats
+                            salary_str = str(salary)
+                            if salary_str.isdigit() and len(salary_str) <= 2:
+                                return "Competitive"  # Replace placeholder values
+                            # Format salary ranges nicely
+                            if ' - ' in salary_str:
+                                try:
+                                    min_sal, max_sal = salary_str.split(' - ')
+                                    min_sal = int(min_sal)
+                                    max_sal = int(max_sal)
+                                    return f"${min_sal:,} - ${max_sal:,}"
+                                except:
+                                    pass
+                            return salary_str
+
+                        title = safe_escape(job.get('job_title', 'No title'))
+                        firm = safe_escape(job.get('firm_name', 'Unknown firm'))
+                        loc = safe_escape(job.get('location', 'Location not specified'))
+                        seniority = safe_escape(job.get('seniority', 'Not specified'))
+                        salary = safe_escape(format_salary(job.get('salary', 'Not specified')))
+                        link = safe_escape(job.get('link', 'No link available'))
+
+                        job_entry = (
+                            f"{i}\\. *{title}*\n"
+                            f"   🏢 {firm}\n"
+                            f"   📍 {loc}\n"
+                            f"   💼 {seniority}\n"
+                            f"   💰 {salary}\n"
+                            f"   🔗 {link}\n\n"
+                        )
+                        response += job_entry
+                        
+                    except Exception as e:
+                        logger.error(f"Error formatting job {i}: {str(e)}", exc_info=True)
+                        continue
+
+                response += "Use /search\\_jobs to search for more jobs\\!"
+                
+                try:
+                    # First try with MarkdownV2
+                    await update.message.reply_text(
+                        response,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        disable_web_page_preview=True
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending markdown response: {str(e)}", exc_info=True)
+                    try:
+                        # If markdown fails, try sending a simplified plain text version
+                        plain_response = "🎯 Here are some matching jobs:\n\n"
+                        for i, job in enumerate(matching_jobs, 1):
+                            plain_response += (
+                                f"{i}. {job.get('job_title', 'No title')}\n"
+                                f"   Company: {job.get('firm_name', 'Unknown firm')}\n"
+                                f"   Location: {job.get('location', 'Location not specified')}\n"
+                                f"   Seniority: {job.get('seniority', 'Not specified')}\n"
+                                f"   Salary: {job.get('salary', 'Not specified')}\n"
+                                f"   Link: {job.get('link', 'No link available')}\n\n"
+                            )
+                        plain_response += "Use /search_jobs to search for more jobs!"
+                        
+                        await update.message.reply_text(
+                            plain_response,
+                            disable_web_page_preview=True
+                        )
+                    except Exception as e2:
+                        logger.error(f"Error sending plain text response: {str(e2)}", exc_info=True)
+                        await update.message.reply_text(
+                            "I found some matching jobs but had trouble displaying them. "
+                            "Please try searching again or contact support if the issue persists."
+                        )
                 return ConversationHandler.END
 
             except Exception as e:
