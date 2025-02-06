@@ -2,6 +2,7 @@ import os
 import logging
 import json
 from datetime import datetime
+from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from pythonjsonlogger import jsonlogger
 import traceback
@@ -10,38 +11,42 @@ from typing import Dict, Any, Optional
 # Ensure logs directory exists
 os.makedirs('logs', exist_ok=True)
 
-class CustomJsonFormatter(jsonlogger.JsonFormatter):
-    """Custom JSON formatter with additional fields."""
-    def add_fields(self, log_record: Dict[str, Any], record: logging.LogRecord, message_dict: Dict[str, Any]) -> None:
-        super().add_fields(log_record, record, message_dict)
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter for logs."""
+    def format(self, record):
+        log_obj = {
+            "message": record.getMessage(),
+            "logger_name": record.name,
+            "environment": os.getenv("ENVIRONMENT", "development"),
+            "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "is_test": os.getenv("TESTING", "false").lower() == "true",
+        }
         
-        # Add timestamp if not present
-        if not log_record.get('timestamp'):
-            log_record['timestamp'] = datetime.utcnow().isoformat()
+        # Add extra fields if they exist
+        if hasattr(record, "request_id"):
+            log_obj["request_id"] = record.request_id
+        if hasattr(record, "path"):
+            log_obj["path"] = record.path
+        if hasattr(record, "method"):
+            log_obj["method"] = record.method
+        if hasattr(record, "duration"):
+            log_obj["duration"] = record.duration
+        if hasattr(record, "error_type"):
+            log_obj["error_type"] = record.error_type
         
-        # Add log level
-        if log_record.get('level'):
-            log_record['level'] = log_record['level'].upper()
-        else:
-            log_record['level'] = record.levelname
-            
-        # Add environment information
-        log_record['environment'] = os.getenv('ENVIRONMENT', 'development')
-        log_record['is_test'] = 'pytest' in os.environ.get('PYTEST_CURRENT_TEST', '')
-            
-        # Add file and line number
-        log_record['file'] = record.filename
-        log_record['line'] = record.lineno
-        log_record['function'] = record.funcName
-        
-        # Add exception info if present
+        # Add file and line information
         if record.exc_info:
-            log_record['exc_info'] = self.formatException(record.exc_info)
-            log_record['exc_type'] = record.exc_info[0].__name__
+            log_obj["exc_info"] = self.formatException(record.exc_info)
+        
+        if record.stack_info:
+            log_obj["stack_info"] = self.formatStack(record.stack_info)
             
-        # Add stack trace for errors
-        if record.levelno >= logging.ERROR:
-            log_record['stack_trace'] = traceback.format_stack()
+        log_obj["file"] = record.filename
+        log_obj["line"] = record.lineno
+        log_obj["function"] = record.funcName
+        
+        return json.dumps(log_obj)
 
 class ErrorContextFilter(logging.Filter):
     """Filter that adds context to error logs."""
@@ -51,44 +56,38 @@ class ErrorContextFilter(logging.Filter):
         return True
 
 def get_logger(name: str) -> logging.Logger:
-    """Get a logger with the specified name and proper configuration."""
+    """Get a configured logger instance."""
     logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
     
-    # Only configure if handlers haven't been added yet
-    if not logger.handlers:
-        logger.setLevel(logging.DEBUG)
-        
-        # Create console handler with a higher log level
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(CustomJsonFormatter())
-        
-        # Create file handler which logs even debug messages
-        file_handler = RotatingFileHandler(
-            filename=f'logs/{name}.json',
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(CustomJsonFormatter())
-        
-        # Add the handlers to the logger
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
-        
-        # Don't propagate to root logger
-        logger.propagate = False
-        
-        # Log initial configuration
-        logger.info(
-            "Logger configured",
-            extra={
-                'logger_name': name,
-                'handlers': ['console', 'file'],
-                'environment': os.getenv('ENVIRONMENT', 'development')
-            }
-        )
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    # Create console handler with JSON formatter
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(JSONFormatter())
+    logger.addHandler(console_handler)
+    
+    # Only set up file logging in development
+    if os.getenv("ENVIRONMENT", "development") != "production":
+        try:
+            # Create logs directory if it doesn't exist
+            os.makedirs('logs', exist_ok=True)
+            
+            # Add file handler
+            file_handler = logging.FileHandler(
+                f"logs/{name}.log",
+                mode='a',
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(JSONFormatter())
+            logger.addHandler(file_handler)
+            
+        except Exception as e:
+            # If file logging fails, log to console only
+            logger.warning(
+                f"Failed to set up file logging: {str(e)}. Using console logging only."
+            )
     
     return logger
 
@@ -119,7 +118,7 @@ def log_error(logger: logging.Logger, error: Exception, context: Optional[Dict[s
         exc_info=True
     )
 
-# Create main application logger
-api_logger = get_logger('api')
-bot_logger = get_logger('bot')
-db_logger = get_logger('db') 
+# Initialize loggers
+api_logger = get_logger("api")
+bot_logger = get_logger("bot")
+db_logger = get_logger("db") 

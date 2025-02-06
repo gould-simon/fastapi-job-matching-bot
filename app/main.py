@@ -248,32 +248,40 @@ async def health_check():
         db_healthy, db_message = await test_database_connection()
         
         # Get system metrics
+        cpu_percent = psutil.cpu_percent()
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
         
-        return {
+        # Prepare health check response
+        health_status = {
             "status": "healthy" if db_healthy else "unhealthy",
             "timestamp": datetime.utcnow().isoformat(),
             "database": {
-                "status": "connected" if db_healthy else "error",
+                "status": "healthy" if db_healthy else "unhealthy",
                 "message": db_message
             },
             "system": {
-                "cpu_percent": psutil.cpu_percent(),
+                "cpu_percent": cpu_percent,
                 "memory_percent": memory.percent,
-                "disk_percent": disk.percent,
-            },
-            "version": "1.0.0"
+                "disk_percent": disk.percent
+            }
         }
-    except Exception as e:
-        api_logger.error(f"Health check failed: {str(e)}")
+        
+        status_code = 200 if db_healthy else 503
         return JSONResponse(
-            status_code=503,
+            content=health_status,
+            status_code=status_code
+        )
+        
+    except Exception as e:
+        api_logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        return JSONResponse(
             content={
                 "status": "unhealthy",
                 "timestamp": datetime.utcnow().isoformat(),
                 "error": str(e)
-            }
+            },
+            status_code=503
         )
 
 @app.get("/metrics")

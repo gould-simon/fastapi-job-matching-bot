@@ -31,12 +31,24 @@ logger.info(f"DATABASE_URL starts with: {DATABASE_URL[:30]}...")  # Show just th
 # Debugging output
 print("Loaded DATABASE_URL:", DATABASE_URL)  # Should print the full database URL
 
+# Configure logging based on environment
+handlers = [
+    logging.StreamHandler(),  # Always log to stdout/stderr
+]
+
+# Only add file logging in development
+if os.getenv("ENVIRONMENT") != "production":
+    try:
+        os.makedirs('logs', exist_ok=True)
+        handlers.append(
+            logging.FileHandler('logs/conversations.log', mode='a', encoding='utf-8')
+        )
+    except Exception as e:
+        print(f"Warning: Could not set up file logging: {e}")
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler('logs/conversations.log', mode='a', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )

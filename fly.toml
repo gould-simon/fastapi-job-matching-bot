@@ -1,74 +1,81 @@
-app = "fastapi-job-matching-bot"
+# fly.toml app configuration file generated for fastapi-job-matching-bot on 2025-02-06T11:04:56Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'fastapi-job-matching-bot'
+primary_region = 'lhr'
 
 [build]
-  builder = "paketobuildpacks/builder:base"
+  builder = 'paketobuildpacks/builder:base'
+
+[deploy]
+  strategy = 'rolling'
+  release_command = 'alembic upgrade head'
 
 [env]
-  PORT = "8080"
-  PYTHON_VERSION = "3.11"
-  ENVIRONMENT = "production"
-  WORKERS_PER_CORE = "1"
-  WEB_CONCURRENCY = "4"
-  LOG_LEVEL = "info"
-  MAX_WORKERS = "8"
+  ENVIRONMENT = 'production'
+  LOG_LEVEL = 'info'
+  MAX_WORKERS = '8'
+  PORT = '8080'
+  PYTHON_VERSION = '3.11'
+  WEB_CONCURRENCY = '4'
+  WORKERS_PER_CORE = '1'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 1
-  processes = ["app"]
+  min_machines_running = 0
+  processes = ['app']
 
-[[http_service.checks]]
-  grace_period = "10s"
-  interval = "30s"
-  method = "GET"
-  timeout = "5s"
-  path = "/health"
-
-[metrics]
-  port = 9091
-  path = "/metrics"
-
-[deploy]
-  release_command = "alembic upgrade head"
-  strategy = "rolling"
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
 
 [[services]]
-  protocol = "tcp"
+  protocol = 'tcp'
   internal_port = 8080
-  processes = ["app"]
+  processes = ['app']
 
   [[services.ports]]
-    port = "80"
-    handlers = ["http"]
+    port = 80
+    handlers = ['http']
     force_https = true
 
   [[services.ports]]
-    port = "443"
-    handlers = ["tls", "http"]
-  
-  [[services.tcp_checks]]
-    interval = "15s"
-    timeout = "2s"
-    grace_period = "1s"
+    port = 443
+    handlers = ['tls', 'http']
 
-  # Configure autoscaling
   [services.concurrency]
-    type = "connections"
+    type = 'connections'
     hard_limit = 25
     soft_limit = 20
 
+  [[services.tcp_checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '1s'
+
   [[services.http_checks]]
-    interval = "10s"
-    timeout = "2s"
-    grace_period = "5s"
-    method = "GET"
-    path = "/health"
-    protocol = "http"
+    interval = '10s'
+    timeout = '2s'
+    grace_period = '5s'
+    method = 'GET'
+    path = '/health'
+    protocol = 'http'
     tls_skip_verify = true
 
-[mounts]
-  source = "data"
-  destination = "/data"
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[[metrics]]
+  port = 9091
+  path = '/metrics'
+  https = false
