@@ -10,7 +10,7 @@ primary_region = 'lhr'
   builder = 'paketobuildpacks/builder:base'
 
 [deploy]
-  strategy = 'rolling'
+  strategy = 'immediate'
   release_command = 'alembic upgrade head'
 
 [env]
