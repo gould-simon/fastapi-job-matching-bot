@@ -1,12 +1,37 @@
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, ConversationHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    CallbackContext,
+    ConversationHandler,
+    ContextTypes,
+)
 from telegram.constants import ParseMode
 from dotenv import load_dotenv
 import os
 import logging
-from app.ai_handler import get_ai_response, process_cv, extract_job_preferences, standardize_search_terms
-from app.database import AsyncSessionLocal, test_database_connection, list_all_tables, get_db
-from app.models import User, UserSearch, UserConversation, Job, JobEmbedding, AccountingFirm
+from app.ai_handler import (
+    get_ai_response,
+    process_cv,
+    extract_job_preferences,
+    standardize_search_terms,
+)
+from app.database import (
+    AsyncSessionLocal,
+    test_database_connection,
+    list_all_tables,
+    get_db,
+)
+from app.models import (
+    User,
+    UserSearch,
+    UserConversation,
+    Job,
+    JobEmbedding,
+    AccountingFirm,
+)
 import asyncio
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -23,10 +48,12 @@ from sqlalchemy import func
 # Load environment variables
 load_dotenv()
 
+
 def setup_logging():
     """Configure logging with file rotation"""
     # This function is now handled by logging_config.py
     pass
+
 
 # Use this at the start of your bot
 logger = get_logger(__name__)
@@ -38,7 +65,9 @@ if not TELEGRAM_BOT_TOKEN:
 
 # Add environment identifier
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
-logger.info(f"🚀 Starting bot in {ENVIRONMENT} environment using bot token: {TELEGRAM_BOT_TOKEN[:8]}...")
+logger.info(
+    f"🚀 Starting bot in {ENVIRONMENT} environment using bot token: {TELEGRAM_BOT_TOKEN[:8]}..."
+)
 
 # Create temp directory if it doesn't exist
 os.makedirs("temp", exist_ok=True)
@@ -49,12 +78,13 @@ application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 # Define conversation states
 AWAITING_JOB_PREFERENCES = 1
 
+
 # Define command handlers
 async def start(update: Update, context: CallbackContext) -> None:
     try:
         # Log the incoming request
         logger.info(f"Start command received from user {update.effective_user.id}")
-        
+
         # First send welcome message before database operations
         welcome_message = (
             "👋 Hello! I'm your AI-powered job-matching assistant for accounting professionals!\n\n"
@@ -66,7 +96,7 @@ async def start(update: Update, context: CallbackContext) -> None:
         )
         await update.message.reply_text(welcome_message)
         logger.info(f"Welcome message sent to user {update.effective_user.id}")
-        
+
         # Then handle database operations
         try:
             async with AsyncSessionLocal() as db:
@@ -74,10 +104,10 @@ async def start(update: Update, context: CallbackContext) -> None:
                 logger.debug("Checking if user exists in database...")
                 result = await db.execute(
                     text("SELECT * FROM users WHERE telegram_id = :telegram_id"),
-                    {"telegram_id": update.effective_user.id}
+                    {"telegram_id": update.effective_user.id},
                 )
                 user = result.first()
-                
+
                 if not user:
                     # Create new user
                     logger.debug("Creating new user...")
@@ -85,37 +115,45 @@ async def start(update: Update, context: CallbackContext) -> None:
                         telegram_id=update.effective_user.id,
                         username=update.effective_user.username,
                         first_name=update.effective_user.first_name,
-                        last_name=update.effective_user.last_name
+                        last_name=update.effective_user.last_name,
                     )
                     db.add(new_user)
                     await db.commit()
                     logger.info(f"New user registered: {update.effective_user.id}")
         except Exception as db_error:
-            logger.error(f"Database error in start command: {str(db_error)}", exc_info=True)
+            logger.error(
+                f"Database error in start command: {str(db_error)}", exc_info=True
+            )
             # Don't return error to user since welcome message was already sent
     except Exception as e:
         logger.error(f"Error in start command: {str(e)}", exc_info=True)
-        await update.message.reply_text("Sorry, I encountered an error. Please try again.")
+        await update.message.reply_text(
+            "Sorry, I encountered an error. Please try again."
+        )
+
 
 async def handle_message(update: Update, context: CallbackContext) -> None:
     try:
         user = update.effective_user
         user_message = update.message.text
-        
+
         # Log the incoming message
         logger.info(f"👤 User ({user.username or user.id}): {user_message}")
-        
+
         # Get AI response
         response = await get_ai_response(user_message)
-        
+
         # Log the bot's response
         logger.info(f"🤖 Bot: {response}")
-        
+
         await update.message.reply_text(response)
-        
+
     except Exception as e:
         logger.error(f"Error in message handler: {str(e)}", exc_info=True)
-        await update.message.reply_text("Sorry, I encountered an error processing your message.")
+        await update.message.reply_text(
+            "Sorry, I encountered an error processing your message."
+        )
+
 
 async def search_jobs(update: Update, context: CallbackContext) -> int:
     """Initial handler for /search_jobs command"""
@@ -129,16 +167,17 @@ async def search_jobs(update: Update, context: CallbackContext) -> int:
     )
     return AWAITING_JOB_PREFERENCES
 
+
 async def process_job_preferences(update: Update, context: CallbackContext) -> int:
     """Process the user's job preferences and search for matching jobs"""
     try:
         user_input = update.message.text
         user_id = update.effective_user.id
         start_time = time.time()
-        
+
         logger.debug(f"Starting job preference processing for user {user_id}")
         logger.info(f"Processing job preferences for user {user_id}: {user_input}")
-        
+
         # Extract structured preferences using AI
         try:
             logger.debug("Calling extract_job_preferences")
@@ -169,9 +208,15 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                 # Check database state before search
                 logger.info("Checking database state before search...")
                 jobs_count = await db.scalar(select(func.count()).select_from(Job))
-                embeddings_count = await db.scalar(select(func.count()).select_from(JobEmbedding))
-                firms_count = await db.scalar(select(func.count()).select_from(AccountingFirm))
-                logger.info(f"Database state: {jobs_count} jobs, {embeddings_count} embeddings, {firms_count} firms")
+                embeddings_count = await db.scalar(
+                    select(func.count()).select_from(JobEmbedding)
+                )
+                firms_count = await db.scalar(
+                    select(func.count()).select_from(AccountingFirm)
+                )
+                logger.info(
+                    f"Database state: {jobs_count} jobs, {embeddings_count} embeddings, {firms_count} firms"
+                )
 
                 if jobs_count == 0:
                     await update.message.reply_text(
@@ -196,10 +241,10 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                 matching_jobs = await semantic_job_search(
                     db=db,
                     query_text=user_input,
-                    location=preferences.get('location'),
-                    limit=5
+                    location=preferences.get("location"),
+                    limit=5,
                 )
-                
+
                 search_time = time.time() - start_time
                 logger.info(f"Search completed in {search_time:.2f} seconds")
                 logger.info(f"Found {len(matching_jobs)} matching jobs")
@@ -217,12 +262,14 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                 logger.debug("Job matches found:")
                 for job in matching_jobs:
                     # Ensure all required fields exist and have valid values
-                    job_title = job.get('job_title', 'No title')
-                    firm_name = job.get('firm_name', 'Unknown firm')
-                    location = job.get('location', 'Location not specified')
-                    similarity_score = job.get('similarity_score', 0.0)
-                    
-                    logger.debug(f"Match: {firm_name} - {job_title} (Score: {similarity_score:.2f})")
+                    job_title = job.get("job_title", "No title")
+                    firm_name = job.get("firm_name", "Unknown firm")
+                    location = job.get("location", "Location not specified")
+                    similarity_score = job.get("similarity_score", 0.0)
+
+                    logger.debug(
+                        f"Match: {firm_name} - {job_title} (Score: {similarity_score:.2f})"
+                    )
 
                 response = "🎯 Here are some matching jobs:\n\n"
                 for i, job in enumerate(matching_jobs, 1):
@@ -233,23 +280,48 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                                 return ""
                             # Convert string representation of list to actual list
                             text_str = str(text)
-                            if text_str.startswith('[') and text_str.endswith(']'):
+                            if text_str.startswith("[") and text_str.endswith("]"):
                                 try:
                                     # Remove the brackets and split by comma
-                                    items = text_str[1:-1].split(',')
+                                    items = text_str[1:-1].split(",")
                                     # Clean up each item
-                                    items = [item.strip().strip("'").strip('"') for item in items if item.strip()]
+                                    items = [
+                                        item.strip().strip("'").strip('"')
+                                        for item in items
+                                        if item.strip()
+                                    ]
                                     if len(items) == 1:
                                         text_str = items[0]  # Single location
                                     else:
-                                        text_str = ", ".join(items)  # Multiple locations
+                                        text_str = ", ".join(
+                                            items
+                                        )  # Multiple locations
                                 except Exception as e:
                                     logger.warning(f"Error parsing location list: {e}")
-                            
+
                             # Escape special characters for MarkdownV2
-                            chars_to_escape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+                            chars_to_escape = [
+                                "_",
+                                "*",
+                                "[",
+                                "]",
+                                "(",
+                                ")",
+                                "~",
+                                "`",
+                                ">",
+                                "#",
+                                "+",
+                                "-",
+                                "=",
+                                "|",
+                                "{",
+                                "}",
+                                ".",
+                                "!",
+                            ]
                             for char in chars_to_escape:
-                                text_str = text_str.replace(char, f'\\{char}')
+                                text_str = text_str.replace(char, f"\\{char}")
                             return text_str
 
                         def format_salary(salary):
@@ -260,9 +332,9 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                             if salary_str.isdigit() and len(salary_str) <= 2:
                                 return "Competitive"  # Replace placeholder values
                             # Format salary ranges nicely
-                            if ' - ' in salary_str:
+                            if " - " in salary_str:
                                 try:
-                                    min_sal, max_sal = salary_str.split(' - ')
+                                    min_sal, max_sal = salary_str.split(" - ")
                                     min_sal = int(min_sal)
                                     max_sal = int(max_sal)
                                     return f"${min_sal:,} - ${max_sal:,}"
@@ -270,12 +342,14 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                                     pass
                             return salary_str
 
-                        title = safe_escape(job.get('job_title', 'No title'))
-                        firm = safe_escape(job.get('firm_name', 'Unknown firm'))
-                        loc = safe_escape(job.get('location', 'Location not specified'))
-                        seniority = safe_escape(job.get('seniority', 'Not specified'))
-                        salary = safe_escape(format_salary(job.get('salary', 'Not specified')))
-                        link = safe_escape(job.get('link', 'No link available'))
+                        title = safe_escape(job.get("job_title", "No title"))
+                        firm = safe_escape(job.get("firm_name", "Unknown firm"))
+                        loc = safe_escape(job.get("location", "Location not specified"))
+                        seniority = safe_escape(job.get("seniority", "Not specified"))
+                        salary = safe_escape(
+                            format_salary(job.get("salary", "Not specified"))
+                        )
+                        link = safe_escape(job.get("link", "No link available"))
 
                         job_entry = (
                             f"{i}\\. *{title}*\n"
@@ -286,22 +360,26 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                             f"   🔗 {link}\n\n"
                         )
                         response += job_entry
-                        
+
                     except Exception as e:
-                        logger.error(f"Error formatting job {i}: {str(e)}", exc_info=True)
+                        logger.error(
+                            f"Error formatting job {i}: {str(e)}", exc_info=True
+                        )
                         continue
 
                 response += "Use /search\\_jobs to search for more jobs\\!"
-                
+
                 try:
                     # First try with MarkdownV2
                     await update.message.reply_text(
                         response,
                         parse_mode=ParseMode.MARKDOWN_V2,
-                        disable_web_page_preview=True
+                        disable_web_page_preview=True,
                     )
                 except Exception as e:
-                    logger.error(f"Error sending markdown response: {str(e)}", exc_info=True)
+                    logger.error(
+                        f"Error sending markdown response: {str(e)}", exc_info=True
+                    )
                     try:
                         # If markdown fails, try sending a simplified plain text version
                         plain_response = "🎯 Here are some matching jobs:\n\n"
@@ -315,13 +393,15 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
                                 f"   Link: {job.get('link', 'No link available')}\n\n"
                             )
                         plain_response += "Use /search_jobs to search for more jobs!"
-                        
+
                         await update.message.reply_text(
-                            plain_response,
-                            disable_web_page_preview=True
+                            plain_response, disable_web_page_preview=True
                         )
                     except Exception as e2:
-                        logger.error(f"Error sending plain text response: {str(e2)}", exc_info=True)
+                        logger.error(
+                            f"Error sending plain text response: {str(e2)}",
+                            exc_info=True,
+                        )
                         await update.message.reply_text(
                             "I found some matching jobs but had trouble displaying them. "
                             "Please try searching again or contact support if the issue persists."
@@ -331,8 +411,11 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
             except Exception as e:
                 error_msg = str(e)
                 error_type = type(e).__name__
-                logger.error(f"Error in semantic search: {error_type} - {error_msg}", exc_info=True)
-                
+                logger.error(
+                    f"Error in semantic search: {error_type} - {error_msg}",
+                    exc_info=True,
+                )
+
                 # Provide more specific error messages based on the type of error
                 if "OpenAI" in error_type:
                     await update.message.reply_text(
@@ -367,6 +450,7 @@ async def process_job_preferences(update: Update, context: CallbackContext) -> i
         )
         return ConversationHandler.END
 
+
 async def upload_cv(update: Update, context: CallbackContext) -> None:
     """Handle CV file uploads"""
     if not update.message.document:
@@ -381,16 +465,18 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
     try:
         # Show typing indicator
         await update.message.chat.send_action(action="typing")
-        
+
         # Get file information
         doc = update.message.document
         file = await context.bot.get_file(doc.file_id)
-        
+
         # Log file details
-        logger.debug(f"Received file: {doc.file_name} (type: {doc.mime_type}, size: {doc.file_size} bytes)")
-        
+        logger.debug(
+            f"Received file: {doc.file_name} (type: {doc.mime_type}, size: {doc.file_size} bytes)"
+        )
+
         # Validate file type
-        if not doc.file_name.lower().endswith(('.pdf', '.doc', '.docx')):
+        if not doc.file_name.lower().endswith((".pdf", ".doc", ".docx")):
             await update.message.reply_text(
                 "❌ Please upload your CV in PDF or Word (.doc/.docx) format only."
             )
@@ -398,7 +484,7 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
 
         # Create temp directory if it doesn't exist
         os.makedirs("temp", exist_ok=True)
-        
+
         # Download the file
         file_path = f"temp/{doc.file_name}"
         await file.download_to_drive(file_path)
@@ -416,7 +502,7 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
                 # Process the CV and get AI analysis
                 cv_analysis = await process_cv(file_path)
                 logger.debug("CV analysis completed")
-                
+
                 # Send detailed analysis
                 await processing_message.edit_text(
                     f"🎯 Here's my analysis of your CV:\n\n{cv_analysis}\n\n"
@@ -454,14 +540,17 @@ async def upload_cv(update: Update, context: CallbackContext) -> None:
         # Only send error message if we haven't already sent one via processing_message
         if not processing_message or not processing_message.edit_date:
             await update.message.reply_text(error_message)
-            
+
         # Clean up the file if it exists
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
                 logger.debug(f"Cleaned up temporary file after error: {file_path}")
             except Exception as cleanup_error:
-                logger.error(f"Error during cleanup: {str(cleanup_error)}", exc_info=True)
+                logger.error(
+                    f"Error during cleanup: {str(cleanup_error)}", exc_info=True
+                )
+
 
 async def cancel(update: Update, context: CallbackContext) -> int:
     """Cancel the conversation."""
@@ -470,6 +559,7 @@ async def cancel(update: Update, context: CallbackContext) -> int:
     )
     return ConversationHandler.END
 
+
 async def timeout(update: Update, context: CallbackContext) -> int:
     """Handle conversation timeout."""
     await update.message.reply_text(
@@ -477,21 +567,26 @@ async def timeout(update: Update, context: CallbackContext) -> int:
     )
     return ConversationHandler.END
 
+
 async def test_db(update: Update, context: CallbackContext) -> None:
     """Handler for /test_db command to verify database connection"""
     try:
         # Only allow admin users to run this command
         admin_ids = [int(id) for id in os.getenv("ADMIN_IDS", "").split(",") if id]
         if not admin_ids or update.effective_user.id not in admin_ids:
-            await update.message.reply_text("⚠️ Sorry, this command is only available to admin users.")
+            await update.message.reply_text(
+                "⚠️ Sorry, this command is only available to admin users."
+            )
             return
 
         # Send initial message
-        status_message = await update.message.reply_text("🔄 Testing database connection...")
+        status_message = await update.message.reply_text(
+            "🔄 Testing database connection..."
+        )
 
         # Run connection test
         is_connected, message = await test_database_connection()
-        
+
         if is_connected:
             await status_message.edit_text(
                 "✅ Database connection successful!\n\n"
@@ -502,7 +597,7 @@ async def test_db(update: Update, context: CallbackContext) -> None:
             # Get list of all tables
             all_tables = await list_all_tables()
             tables_info = "\n• ".join(all_tables) if all_tables else "No tables found"
-            
+
             await status_message.edit_text(
                 f"❌ Database connection failed.\n\n"
                 f"Error: {message}\n\n"
@@ -513,13 +608,14 @@ async def test_db(update: Update, context: CallbackContext) -> None:
                 "• Database permissions are correct\n\n"
                 "Check the logs for more details."
             )
-    
+
     except Exception as e:
         logger.error(f"Error in test_db command: {str(e)}", exc_info=True)
         await update.message.reply_text(
             "❌ An error occurred while testing the database connection. "
             "Please check the logs for details."
         )
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command handler - creates new user if not exists"""
@@ -542,11 +638,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     telegram_id=update.effective_user.id,
                     username=update.effective_user.username,
                     first_name=update.effective_user.first_name,
-                    last_name=update.effective_user.last_name
+                    last_name=update.effective_user.last_name,
                 )
                 db.add(user)
                 await db.commit()
-                
+
                 await update.message.reply_text(
                     f"Hello {user.username or user.first_name or 'there'}! 👋\n"
                     "I'm your personal job matching assistant.\n"
@@ -563,6 +659,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Sorry, there was an error starting the conversation. Please try again."
         )
 
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /help command"""
     help_text = (
@@ -575,30 +672,30 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(help_text)
 
+
 async def upload_cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle CV upload"""
     try:
         user_info = {
-            'telegram_id': update.effective_user.id,
-            'username': update.effective_user.username
+            "telegram_id": update.effective_user.id,
+            "username": update.effective_user.username,
         }
-        logger.info("CV upload initiated", extra={'user': user_info})
+        logger.info("CV upload initiated", extra={"user": user_info})
 
         if not update.message.document:
-            logger.warning("No document provided for CV upload", extra={'user': user_info})
+            logger.warning(
+                "No document provided for CV upload", extra={"user": user_info}
+            )
             await update.message.reply_text(
                 "Please upload your CV as a PDF or Word document."
             )
             return
 
         file = update.message.document
-        if not file.file_name.lower().endswith(('.pdf', '.docx')):
+        if not file.file_name.lower().endswith((".pdf", ".docx")):
             logger.warning(
-                "Invalid file format", 
-                extra={
-                    'user': user_info,
-                    'file_name': file.file_name
-                }
+                "Invalid file format",
+                extra={"user": user_info, "file_name": file.file_name},
             )
             await update.message.reply_text(
                 "Please upload your CV in PDF or Word (.docx) format only."
@@ -609,19 +706,19 @@ async def upload_cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_file = await context.bot.get_file(file.file_id)
         file_path = f"temp/{update.effective_user.id}_{file.file_name}"
         await bot_file.download_to_drive(file_path)
-        
+
         logger.info(
-            "CV file downloaded", 
+            "CV file downloaded",
             extra={
-                'user': user_info,
-                'file_path': file_path,
-                'file_size': os.path.getsize(file_path)
-            }
+                "user": user_info,
+                "file_path": file_path,
+                "file_size": os.path.getsize(file_path),
+            },
         )
 
         # Process CV
         cv_text, cv_embedding = await process_cv(file_path)
-        
+
         # Update database
         async with AsyncSessionLocal() as session:
             user = await session.execute(
@@ -629,14 +726,16 @@ async def upload_cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             user = user.scalar_one()
             user.cv_text = cv_text
-            user.cv_embedding = json.dumps(cv_embedding)  # Store as JSON string for SQLite
+            user.cv_embedding = json.dumps(
+                cv_embedding
+            )  # Store as JSON string for SQLite
             await session.commit()
 
-        logger.info("CV processed successfully", extra={'user': user_info})
-        
+        logger.info("CV processed successfully", extra={"user": user_info})
+
         # Clean up
         os.remove(file_path)
-        
+
         await update.message.reply_text(
             "✅ Your CV has been successfully processed! You can now:\n"
             "1. Search for jobs using /search\n"
@@ -649,8 +748,9 @@ async def upload_cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Sorry, I encountered an error while processing your CV. Please try again later."
         )
         # Clean up on error
-        if 'file_path' in locals() and os.path.exists(file_path):
+        if "file_path" in locals() and os.path.exists(file_path):
             os.remove(file_path)
+
 
 async def search_jobs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Search for jobs command handler"""
@@ -670,11 +770,10 @@ async def search_jobs_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             try:
                 user = result.scalar_one()
-                
+
                 # Record the search
                 search = UserSearch(
-                    telegram_id=update.effective_user.id,
-                    search_query=search_query
+                    telegram_id=update.effective_user.id, search_query=search_query
                 )
                 db.add(search)
                 await db.commit()
@@ -700,6 +799,7 @@ async def search_jobs_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "❌ Sorry, there was an error processing your search. Please try again later."
         )
+
 
 async def set_preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set user preferences command handler"""
@@ -734,7 +834,7 @@ async def set_preferences_command(update: Update, context: ContextTypes.DEFAULT_
             )
             try:
                 user = result.scalar_one()
-                
+
                 # Update preferences
                 user.set_preferences(preferences)
                 await db.commit()
@@ -744,7 +844,7 @@ async def set_preferences_command(update: Update, context: ContextTypes.DEFAULT_
                     "Your current preferences:\n"
                     f"{json.dumps(preferences, indent=2)}"
                 )
-                
+
             except NoResultFound:
                 logger.error(f"User not found: {update.effective_user.id}")
                 await update.message.reply_text(
@@ -764,50 +864,57 @@ async def set_preferences_command(update: Update, context: ContextTypes.DEFAULT_
             "❌ Sorry, there was an error setting your preferences. Please try again later."
         )
 
+
 async def main() -> None:
     try:
         logger.debug("Starting bot initialization...")
         logger.debug(f"Using token: {TELEGRAM_BOT_TOKEN[:5]}...")
-        
+
         # Create conversation handler for job search
         job_search_handler = ConversationHandler(
             entry_points=[CommandHandler("search_jobs", search_jobs)],
             states={
                 AWAITING_JOB_PREFERENCES: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_job_preferences)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, process_job_preferences
+                    )
                 ]
             },
             fallbacks=[
                 CommandHandler("cancel", cancel),
-                MessageHandler(filters.COMMAND, cancel)
+                MessageHandler(filters.COMMAND, cancel),
             ],
-            conversation_timeout=300  # 5 minutes timeout
+            conversation_timeout=300,  # 5 minutes timeout
         )
-        
+
         # Register handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(job_search_handler)  # Add the conversation handler
         application.add_handler(CommandHandler("upload_cv", upload_cv))
-        application.add_handler(CommandHandler("test_db", test_db))  # Add the test_db command
+        application.add_handler(
+            CommandHandler("test_db", test_db)
+        )  # Add the test_db command
         application.add_handler(MessageHandler(filters.Document.ALL, upload_cv))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
+        application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+        )
+
         logger.debug("Handlers registered successfully")
 
         # Start polling
         logger.info("🤖 Bot is now polling for messages...")
-        
+
         # Start the bot
         await application.initialize()
         await application.start()
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        
+
         logger.info("Bot is running. Press Ctrl+C to stop")
-        
+
         # Keep the bot running until interrupted
         stop_signal = asyncio.Event()
         await stop_signal.wait()
-        
+
     except Exception as e:
         logger.error(f"Failed to start bot: {str(e)}", exc_info=True)
         raise
@@ -815,6 +922,7 @@ async def main() -> None:
         # Only try to stop if the application was started
         if application.running:
             await application.stop()
+
 
 if __name__ == "__main__":
     # Run the bot in polling mode for local development
