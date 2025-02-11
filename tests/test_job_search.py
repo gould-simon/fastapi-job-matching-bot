@@ -7,11 +7,12 @@ from app.embeddings import semantic_job_search, generate_job_embedding
 from app.models import Job, AccountingFirm, JobEmbedding
 from sqlalchemy import insert, select
 import numpy as np
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 # Setup logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
 
 @pytest.mark.asyncio
 async def test_extract_job_preferences():
@@ -24,8 +25,8 @@ async def test_extract_job_preferences():
                 "location": "new york",
                 "experience": None,
                 "salary": None,
-                "search_type": "job_title"
-            }
+                "search_type": "job_title",
+            },
         },
         {
             "input": "audit technology roles in new york for manager or director level",
@@ -34,8 +35,8 @@ async def test_extract_job_preferences():
                 "location": "new york",
                 "experience": "manager or director",
                 "salary": None,
-                "search_type": "specialized"
-            }
+                "search_type": "specialized",
+            },
         },
         {
             "input": "senior level technology audit jobs in boston",
@@ -44,18 +45,20 @@ async def test_extract_job_preferences():
                 "location": "boston",
                 "experience": "senior",
                 "salary": None,
-                "search_type": "specialized"
-            }
-        }
+                "search_type": "specialized",
+            },
+        },
     ]
-    
+
     for case in test_cases:
         preferences = await extract_job_preferences(case["input"])
         for key, expected_value in case["expected"].items():
             if expected_value is not None:
                 assert key in preferences, f"Key {key} not found in preferences"
-                assert preferences[key].lower() == expected_value.lower(), \
-                    f"Expected {key}='{expected_value}', got '{preferences[key]}'"
+                assert (
+                    preferences[key].lower() == expected_value.lower()
+                ), f"Expected {key}='{expected_value}', got '{preferences[key]}'"
+
 
 @pytest.mark.asyncio
 async def test_standardize_search_terms():
@@ -66,67 +69,101 @@ async def test_standardize_search_terms():
                 "role": "audit manager",
                 "location": "NY",
                 "experience": "manager level",
-                "search_type": "job_title"
+                "search_type": "job_title",
             },
             "expected": {
                 "role": {
                     "standardized": "audit manager",
-                    "search_variations": ["audit manager", "audit lead", "audit team manager", "auditing manager"]
+                    "search_variations": [
+                        "audit manager",
+                        "audit lead",
+                        "audit team manager",
+                        "auditing manager",
+                    ],
                 },
                 "location": {
                     "standardized": "new york",
-                    "search_variations": ["new york", "ny", "nyc"]
+                    "search_variations": ["new york", "ny", "nyc"],
                 },
                 "experience": {
                     "standardized": "manager",
-                    "search_variations": ["manager", "management", "managerial", "team lead"]
-                }
-            }
+                    "search_variations": [
+                        "manager",
+                        "management",
+                        "managerial",
+                        "team lead",
+                    ],
+                },
+            },
         },
         {
             "input": {
                 "role": "technology audit",
                 "location": "boston",
                 "experience": "senior",
-                "search_type": "specialized"
+                "search_type": "specialized",
             },
             "expected": {
                 "role": {
                     "standardized": "technology audit",
-                    "search_variations": ["technology audit", "it audit", "tech audit", "information technology audit"]
+                    "search_variations": [
+                        "technology audit",
+                        "it audit",
+                        "tech audit",
+                        "information technology audit",
+                    ],
                 },
                 "location": {
                     "standardized": "boston",
-                    "search_variations": ["boston", "ma", "massachusetts"]
+                    "search_variations": ["boston", "ma", "massachusetts"],
                 },
                 "experience": {
                     "standardized": "senior",
-                    "search_variations": ["senior", "senior level", "experienced", "advanced"]
-                }
-            }
-        }
+                    "search_variations": [
+                        "senior",
+                        "senior level",
+                        "experienced",
+                        "advanced",
+                    ],
+                },
+            },
+        },
     ]
-    
+
     for case in test_cases:
         standardized = await standardize_search_terms(case["input"])
-        assert isinstance(standardized, dict), "Standardized output should be a dictionary"
-        
+        assert isinstance(
+            standardized, dict
+        ), "Standardized output should be a dictionary"
+
         # Check structure
         for key in ["role", "location", "experience"]:
             if key in case["expected"]:
                 assert key in standardized, f"Missing key {key} in standardized output"
-                assert "standardized" in standardized[key], f"Missing standardized value for {key}"
-                assert "search_variations" in standardized[key], f"Missing search variations for {key}"
-                
+                assert (
+                    "standardized" in standardized[key]
+                ), f"Missing standardized value for {key}"
+                assert (
+                    "search_variations" in standardized[key]
+                ), f"Missing search variations for {key}"
+
                 # Check standardized value
-                assert standardized[key]["standardized"].lower() == case["expected"][key]["standardized"].lower(), \
-                    f"Incorrect standardized value for {key}"
-                
+                assert (
+                    standardized[key]["standardized"].lower()
+                    == case["expected"][key]["standardized"].lower()
+                ), f"Incorrect standardized value for {key}"
+
                 # Check that expected variations are included (but allow for additional variations)
-                expected_variations = set(v.lower() for v in case["expected"][key]["search_variations"])
-                actual_variations = set(v.lower() for v in standardized[key]["search_variations"])
-                assert expected_variations.issubset(actual_variations), \
-                    f"Missing expected variations for {key}. Expected {expected_variations} to be subset of {actual_variations}"
+                expected_variations = set(
+                    v.lower() for v in case["expected"][key]["search_variations"]
+                )
+                actual_variations = set(
+                    v.lower() for v in standardized[key]["search_variations"]
+                )
+                assert expected_variations.issubset(
+                    actual_variations
+                ), f"Missing expected variations for {key}. Expected {expected_variations} to be subset of {actual_variations}"
+
 
 @pytest.mark.asyncio
 async def test_semantic_job_search(db_session):
@@ -145,12 +182,12 @@ async def test_semantic_job_search(db_session):
         logo="test_logo.png",
         country="USA",
         jobs_count=1,
-        last_scraped=datetime.now(UTC),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC)
+        last_scraped=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     db_session.add(firm)
-    
+
     job = Job(
         firm=firm,
         job_title="Senior Auditor",
@@ -162,30 +199,26 @@ async def test_semantic_job_search(db_session):
         employment="Full-time",
         salary="Competitive",
         link="https://testfirm.com/jobs/senior-auditor",
-        created_at=datetime.now(UTC),
-        date_published=datetime.now(UTC),
-        req_no="JOB-001"
+        created_at=datetime.now(timezone.utc),
+        date_published=datetime.now(timezone.utc),
+        req_no="JOB-001",
     )
     db_session.add(job)
-    
-    embedding = JobEmbedding(
-        job=job,
-        embedding_vector=[0.1] * 1536  # Mock embedding
-    )
+
+    embedding = JobEmbedding(job=job, embedding_vector=[0.1] * 1536)  # Mock embedding
     db_session.add(embedding)
-    
+
     await db_session.commit()
-    
+
     # Test search
     results = await semantic_job_search(
-        db_session,
-        "experienced auditor in New York",
-        limit=5
+        db_session, "experienced auditor in New York", limit=5
     )
-    
+
     assert len(results) > 0
     assert results[0].job_title == "Senior Auditor"
     assert results[0].location == "New York, USA"
+
 
 @pytest.mark.asyncio
 async def test_location_filtering(db_session):
@@ -204,9 +237,9 @@ async def test_location_filtering(db_session):
         logo="ny_logo.png",
         country="USA",
         jobs_count=1,
-        last_scraped=datetime.now(UTC),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC)
+        last_scraped=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     firm2 = AccountingFirm(
         name="LA Firm",
@@ -221,12 +254,12 @@ async def test_location_filtering(db_session):
         logo="la_logo.png",
         country="USA",
         jobs_count=1,
-        last_scraped=datetime.now(UTC),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC)
+        last_scraped=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     db_session.add_all([firm1, firm2])
-    
+
     job1 = Job(
         firm=firm1,
         job_title="Auditor",
@@ -238,9 +271,9 @@ async def test_location_filtering(db_session):
         employment="Full-time",
         salary="Competitive",
         link="https://nyfirm.com/jobs/auditor",
-        created_at=datetime.now(UTC),
-        date_published=datetime.now(UTC),
-        req_no="JOB-002"
+        created_at=datetime.now(timezone.utc),
+        date_published=datetime.now(timezone.utc),
+        req_no="JOB-002",
     )
     job2 = Job(
         firm=firm2,
@@ -253,31 +286,26 @@ async def test_location_filtering(db_session):
         employment="Full-time",
         salary="Competitive",
         link="https://lafirm.com/jobs/auditor",
-        created_at=datetime.now(UTC),
-        date_published=datetime.now(UTC),
-        req_no="JOB-003"
+        created_at=datetime.now(timezone.utc),
+        date_published=datetime.now(timezone.utc),
+        req_no="JOB-003",
     )
     db_session.add_all([job1, job2])
-    
+
     await db_session.commit()
-    
+
     # Test NY search
-    ny_results = await semantic_job_search(
-        db_session,
-        "auditor in New York",
-        limit=5
-    )
+    ny_results = await semantic_job_search(db_session, "auditor in New York", limit=5)
     assert len(ny_results) == 1
     assert ny_results[0].location == "New York, USA"
-    
+
     # Test LA search
     la_results = await semantic_job_search(
-        db_session,
-        "auditor in Los Angeles",
-        limit=5
+        db_session, "auditor in Los Angeles", limit=5
     )
     assert len(la_results) == 1
     assert la_results[0].location == "Los Angeles, USA"
+
 
 @pytest.mark.asyncio
 async def test_sql_parameter_handling(db_session):
@@ -296,12 +324,12 @@ async def test_sql_parameter_handling(db_session):
         logo="test_logo_2.png",
         country="USA",
         jobs_count=1,
-        last_scraped=datetime.now(UTC),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC)
+        last_scraped=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     db_session.add(firm)
-    
+
     job = Job(
         firm=firm,
         job_title="Auditor",
@@ -313,33 +341,30 @@ async def test_sql_parameter_handling(db_session):
         employment="Full-time",
         salary="Competitive",
         link="https://testfirm2.com/jobs/auditor",
-        created_at=datetime.now(UTC),
-        date_published=datetime.now(UTC),
-        req_no="JOB-004"
+        created_at=datetime.now(timezone.utc),
+        date_published=datetime.now(timezone.utc),
+        req_no="JOB-004",
     )
     db_session.add(job)
-    
+
     await db_session.commit()
-    
+
     # Test with potentially malicious input
-    results = await semantic_job_search(
-        db_session,
-        "'; DROP TABLE jobs; --",
-        limit=5
-    )
-    
+    results = await semantic_job_search(db_session, "'; DROP TABLE jobs; --", limit=5)
+
     # Verify table still exists and no error occurred
     result = await db_session.execute(select(Job))
     assert result.scalar_one() is not None
+
 
 @pytest.mark.asyncio
 async def test_error_handling(db_session):
     """Test error handling in job search"""
     with pytest.raises(ValueError):
         await semantic_job_search(db_session, "", limit=5)
-    
+
     with pytest.raises(ValueError):
         await semantic_job_search(db_session, "auditor", limit=0)
-    
+
     with pytest.raises(ValueError):
-        await semantic_job_search(db_session, "auditor", limit=-1) 
+        await semantic_job_search(db_session, "auditor", limit=-1)
