@@ -5,9 +5,16 @@ import pdfplumber  # For PDF files
 from docx import Document  # For Word documents
 import logging
 import json
+from dotenv import load_dotenv
 
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Load environment variables from .env file
+load_dotenv()
+
+api_key = os.getenv("OPENAI_API_KEY")
+
+client = AsyncOpenAI(api_key=api_key)
 logger = logging.getLogger(__name__)
+
 
 async def get_ai_response(user_input: str, context: Optional[str] = None) -> str:
     try:
@@ -26,60 +33,69 @@ async def get_ai_response(user_input: str, context: Optional[str] = None) -> str
         - Professional qualifications (CPA, ACCA, etc.)
         
         Keep responses professional but friendly, and always end with a clear next step or call to action."""
-        
-        user_message = f"Context: {context}\nUser input: {user_input}" if context else user_input
-        
+
+        user_message = (
+            f"Context: {context}\nUser input: {user_input}" if context else user_input
+        )
+
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
+                {"role": "user", "content": user_message},
             ],
             max_tokens=500,  # Increased token limit for more detailed responses
-            temperature=0.7
+            temperature=0.7,
         )
-        
+
         # Log the response for monitoring
         logger.debug(f"AI Response generated for input: {user_input[:50]}...")
-        logger.debug(f"Response length: {len(response.choices[0].message.content)} chars")
-        
+        logger.debug(
+            f"Response length: {len(response.choices[0].message.content)} chars"
+        )
+
         return response.choices[0].message.content
-        
+
     except Exception as e:
         logger.error(f"Error in get_ai_response: {str(e)}", exc_info=True)
-        return ("I apologize, but I'm having trouble processing your request right now. "
-                "Please try:\n"
-                "1. Using /search_jobs for job searches\n"
-                "2. Being more specific in your question\n"
-                "3. Breaking down complex queries into simpler ones")
+        return (
+            "I apologize, but I'm having trouble processing your request right now. "
+            "Please try:\n"
+            "1. Using /search_jobs for job searches\n"
+            "2. Being more specific in your question\n"
+            "3. Breaking down complex queries into simpler ones"
+        )
+
 
 async def process_cv(file_path: str) -> str:
     """Extract text from CV and process it"""
     text = ""
-    
+
     try:
         logger.debug(f"Starting CV processing for file: {file_path}")
-        
+
         # Check if file exists
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
             return "Error: The CV file could not be found. Please try uploading again."
 
         # Extract text from CV
-        if file_path.endswith('.pdf'):
+        if file_path.endswith(".pdf"):
             logger.debug("Processing PDF file")
             try:
                 with pdfplumber.open(file_path) as pdf:
-                    text = '\n'.join(page.extract_text() for page in pdf.pages if page.extract_text())
+                    text = "\n".join(
+                        page.extract_text() for page in pdf.pages if page.extract_text()
+                    )
             except Exception as pdf_error:
                 logger.error(f"PDF processing error: {str(pdf_error)}")
                 raise Exception(f"Could not read PDF file: {str(pdf_error)}")
-                
-        elif file_path.endswith(('.docx', '.doc')):
+
+        elif file_path.endswith((".docx", ".doc")):
             logger.debug("Processing Word document")
             try:
                 doc = Document(file_path)
-                text = '\n'.join(paragraph.text for paragraph in doc.paragraphs)
+                text = "\n".join(paragraph.text for paragraph in doc.paragraphs)
             except Exception as doc_error:
                 logger.error(f"Word document processing error: {str(doc_error)}")
                 raise Exception(f"Could not read Word document: {str(doc_error)}")
@@ -93,7 +109,7 @@ async def process_cv(file_path: str) -> str:
             return "Error: Could not extract text from your CV. Please ensure the file is not empty or password protected."
 
         logger.debug(f"Successfully extracted {len(text)} characters from CV")
-        
+
         # Create context and prompt for CV analysis
         context = """Analyze this CV as an expert CV analyzer for accounting professionals. 
         Provide:
@@ -101,14 +117,14 @@ async def process_cv(file_path: str) -> str:
         2. Suggested job roles that match their profile
         3. Any suggestions for improving their CV
         Keep the response concise and professional."""
-        
+
         # Use the existing get_ai_response function for CV analysis
         logger.debug("Sending CV text to OpenAI for analysis")
         response = await get_ai_response(text, context=context)
         logger.debug("Successfully received analysis from OpenAI")
-        
+
         return response
-        
+
     except Exception as e:
         logger.error(f"Error in process_cv: {str(e)}", exc_info=True)
         return f"I apologize, but I encountered an error while analyzing your CV: {str(e)}. Please try again or contact support."
@@ -116,6 +132,7 @@ async def process_cv(file_path: str) -> str:
         # Clean up temporary file
         if os.path.exists(file_path):
             os.remove(file_path)
+
 
 async def extract_job_preferences(user_input: str) -> Dict[str, Optional[str]]:
     """Extract job preferences from user input using OpenAI's API."""
@@ -170,30 +187,34 @@ Example outputs:
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that extracts job search preferences from user input. Use exact standardized terms for experience levels and be precise about search_type classification."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that extracts job search preferences from user input. Use exact standardized terms for experience levels and be precise about search_type classification.",
+                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0,
-            max_tokens=150
+            max_tokens=150,
         )
 
         # Parse the response
         preferences = json.loads(response.choices[0].message.content)
-        
+
         # Ensure all required fields are present
         required_fields = ["role", "location", "experience", "salary", "search_type"]
         for field in required_fields:
             if field not in preferences:
                 preferences[field] = None
-        
+
         # Log the extracted preferences
         logger.info(f"Extracted preferences: {preferences}")
-        
+
         return preferences
 
     except Exception as e:
         logger.error(f"Error extracting job preferences: {str(e)}")
         raise
+
 
 async def standardize_search_terms(preferences: Dict) -> Dict:
     """
@@ -255,22 +276,25 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
 
         # Convert preferences to a formatted string for the AI
         preferences_str = json.dumps(preferences, indent=2)
-        
+
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Standardize these search terms:\n{preferences_str}"}
+                {
+                    "role": "user",
+                    "content": f"Standardize these search terms:\n{preferences_str}",
+                },
             ],
             max_tokens=800,
-            temperature=0.2
+            temperature=0.2,
         )
 
         # Initialize standardized structure with default values
         standardized = {
             "role": {"standardized": None, "search_variations": []},
             "location": {"standardized": None, "search_variations": []},
-            "experience": {"standardized": None, "search_variations": []}
+            "experience": {"standardized": None, "search_variations": []},
         }
 
         try:
@@ -282,17 +306,25 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
             for field in ["role", "location", "experience"]:
                 if field in preferences and preferences[field]:
                     field_data = ai_response.get(field, {})
-                    
+
                     # Validate field structure
-                    if (isinstance(field_data, dict) and 
-                        "standardized" in field_data and 
-                        "search_variations" in field_data and 
-                        isinstance(field_data["search_variations"], list)):
-                        
+                    if (
+                        isinstance(field_data, dict)
+                        and "standardized" in field_data
+                        and "search_variations" in field_data
+                        and isinstance(field_data["search_variations"], list)
+                    ):
+
                         standardized[field] = {
-                            "standardized": str(field_data["standardized"]).lower().strip(),
-                            "search_variations": sorted(set(str(var).lower().strip() 
-                                               for var in field_data["search_variations"]))
+                            "standardized": str(field_data["standardized"])
+                            .lower()
+                            .strip(),
+                            "search_variations": sorted(
+                                set(
+                                    str(var).lower().strip()
+                                    for var in field_data["search_variations"]
+                                )
+                            ),
                         }
 
             return standardized
@@ -300,7 +332,7 @@ async def standardize_search_terms(preferences: Dict) -> Dict:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI response: {str(e)}")
             raise
-            
+
     except Exception as e:
         logger.error(f"Error in standardize_search_terms: {str(e)}")
-        raise 
+        raise
